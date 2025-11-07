@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .podName }}
+  namespace: {{ .namespace }}
+  annotations:
+    k8s.v1.cni.cncf.io/networks: |
+      [
+        {{- range $index, $network := .networks }}
+        {{- if $index }},{{ end }}
+        {
+          "name": "{{ $network.name }}",
+          "namespace": "{{ $.namespace }}"
+          {{- if $network.ipAddress }},
+          "ips": ["{{ $network.ipAddress }}"]
+          {{- end }}
+          {{- if $network.mac }},
+          "mac": "{{ $network.mac }}"
+          {{- end }}
+        }
+        {{- end }}
+      ]
+spec:
+  containers:
+  - name: test-container
+    image: {{ .containerImage }}
+    command: ["sh", "-c", "sleep infinity"]
+    securityContext:
+      privileged: true
+      capabilities:
+        add: ["NET_ADMIN", "SYS_ADMIN"]
+  restartPolicy: Never
+

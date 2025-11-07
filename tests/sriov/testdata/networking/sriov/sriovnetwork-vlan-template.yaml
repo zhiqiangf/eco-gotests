@@ -1,0 +1,22 @@
+apiVersion: sriovnetwork.openshift.io/v1
+kind: SriovNetwork
+metadata:
+  name: {{ .name }}
+  namespace: {{ .namespace }}
+spec:
+  resourceName: {{ .resourceName }}
+  networkNamespace: {{ .networkNamespace }}
+  vlan: {{ .vlanId }}
+  {{- if .mtu }}
+  mtu: {{ .mtu }}
+  {{- end }}
+  ipam: |
+    {
+      "type": "{{ .ipamType }}",
+      {{- if eq .ipamType "whereabouts" }}
+      "range": "{{ .ipamRange }}"
+      {{- else }}
+      "subnet": "192.168.1.0/24"
+      {{- end }}
+    }
+

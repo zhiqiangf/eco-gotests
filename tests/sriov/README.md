@@ -8,6 +8,8 @@ This directory contains SRIOV tests adapted from the OpenShift tests private rep
 - `sriov_reinstall_test.go` - SR-IOV operator reinstallation test suite
 - `sriov_lifecycle_test.go` - SR-IOV component lifecycle test suite
 - `sriov_operator_networking_test.go` - SR-IOV operator-level networking tests (IPv4, IPv6, dual-stack)
+- `sriov_bonding_test.go` - SR-IOV bonding tests with IPAM integration and bonding modes
+- `sriov_advanced_scenarios_test.go` - Advanced end-to-end scenarios and multi-feature integration tests
 - `helpers.go` - Helper functions for SRIOV test operations
 - `testdata/` - Template files and test data
 
@@ -173,6 +175,112 @@ The operator networking test suite validates SR-IOV operator's networking capabi
 
 **Note:** All operator networking tests are marked as `[Disruptive]` and `[Serial]` as they create SR-IOV policies and networks that modify cluster configuration.
 
+### Bonding Test Suite (`sriov_bonding_test.go`)
+
+The bonding test suite validates SR-IOV bonding capabilities with different IPAM methods and bonding modes:
+
+1. **test_sriov_bond_ipam_integration** - SR-IOV bonding with IP Address Management
+   - **Phase 1: Bond with Whereabouts IPAM**
+     - Creates 2 SR-IOV networks (net1, net2) using same resource pool
+     - Creates bond NetworkAttachmentDefinition with active-backup mode
+     - Configures Whereabouts IPAM (subnet: 192.168.100.0/24)
+     - Deploys client and server pods with bonded interfaces
+     - Validates bond interface status (bond0 with 2 slaves)
+     - Verifies IPAM auto-assigns IP addresses from whereabouts range
+     - Tests connectivity over bonded interface
+   - **Phase 2: Bond with Static IPAM**
+     - Creates bond NAD with static IPAM configuration
+     - Deploys pods with static IP addresses (192.168.101.10/24, 192.168.101.11/24)
+     - Validates bond configuration persists with static IPs
+     - Tests connectivity with static IP assignment
+     - Verifies active slave selection in active-backup mode
+   - **Key Features:** Both Whereabouts and Static IPAM validated with SR-IOV bonding
+
+2. **test_sriov_bond_mode_operator_level** - Different bonding modes from operator perspective
+   - **Phase 1: Active-Backup Mode (mode 1)**
+     - Creates bond NAD with active-backup mode
+     - Deploys test pod with bonded SR-IOV interfaces
+     - Validates bond mode via /proc/net/bonding/bond0
+     - Verifies only one slave interface is active at a time
+     - Checks active slave selection and failover capability
+   - **Phase 2: 802.3ad/LACP Mode (mode 4)**
+     - Creates bond NAD with 802.3ad LACP mode
+     - Deploys test pod with LACP bonding
+     - Validates LACP negotiation and configuration
+     - Checks LACP rate and aggregator status
+     - Verifies both slaves can participate in aggregation
+   - **Phase 3: Operator-Level Validation**
+     - Verifies SriovNetwork resource allocation persists across pod lifecycles
+     - Tests rapid bond mode switching (delete/recreate pods)
+     - Validates NetworkAttachmentDefinition specs match requested bond config
+     - Confirms operator maintains correct resource allocation during bond operations
+   - **Key Features:** Active-backup and 802.3ad modes validated at operator level
+
+**Note:** All bonding tests are marked as `[Disruptive]` and `[Serial]` as they create SR-IOV resources and require sequential execution.
+
+### Advanced Scenarios Test Suite (`sriov_advanced_scenarios_test.go`)
+
+The advanced scenarios test suite validates complex end-to-end deployments and multi-feature integration:
+
+1. **test_sriov_end_to_end_telco_scenario** - Complete telco deployment scenario with SR-IOV
+   - **Phase 1: Setup Telco Network Topology**
+     - Creates 3 SR-IOV networks simulating telco architecture:
+       * Management network: Static IPAM (10.10.10.0/24)
+       * User plane network: Whereabouts IPAM (192.168.50.0/24), VLAN 100, MTU 9000
+       * Signaling network: Whereabouts IPAM (192.168.51.0/24), VLAN 200
+     - Each network configured with appropriate VLAN tagging and MTU
+   - **Phase 2: Deploy Telco Workload Simulation**
+     - Control plane pod: Attached to management + signaling networks
+     - User plane function pod: Attached to management + user plane networks
+     - Gateway pod: Attached to user plane network
+     - Each pod uses multiple SR-IOV interfaces via Multus annotations
+   - **Phase 3: Validate E2E Telco Scenario**
+     - Verifies all pods have correct number of SR-IOV interfaces (3-4 total)
+     - Tests control plane to user plane connectivity via management network (10.10.10.x)
+     - Tests user plane traffic flow via VLAN 100 network (192.168.50.x)
+     - Validates VLAN tagging on user plane interfaces
+     - Verifies MTU 9000 on user plane interfaces for jumbo frames
+     - Tests signaling plane connectivity
+     - Runs iperf3 throughput test to validate performance
+   - **Phase 4: Resilience Testing**
+     - Deletes user plane pod to simulate failure
+     - Validates surviving pods maintain connectivity
+     - Recreates pod and confirms SR-IOV resource re-allocation
+     - Tests automatic recovery and resource management
+   - **Key Features:** Multi-network topology, VLAN tagging, MTU configuration, pod resilience
+
+2. **test_sriov_multi_feature_integration** - SR-IOV integration with multiple CNF features
+   - **Phase 1: SR-IOV with DPDK**
+     - Creates SR-IOV policy with vfio-pci device type
+     - Deploys DPDK test pod using SR-IOV VFs
+     - Validates DPDK interface initialization and attachment
+     - Tests DPDK workload with SR-IOV resources
+     - Gracefully skips if hardware doesn't support DPDK
+   - **Phase 2: Multiple SR-IOV Networks per Pod**
+     - Creates 3 different SR-IOV networks:
+       * Network A: VLAN 10, netdevice
+       * Network B: VLAN 20, netdevice
+       * Network C: No VLAN, netdevice
+     - Deploys pod with all 3 SR-IOV interfaces attached simultaneously
+     - Validates each interface has correct VLAN configuration
+     - Verifies IP address assignment on all 3 interfaces (10.10.10.10, 10.10.20.10, 10.10.30.10)
+     - Tests connectivity through each interface independently
+   - **Phase 3: Mixed Networking (SR-IOV + OVN-Kubernetes)**
+     - Deploys pods with OVN-K primary network and SR-IOV secondary
+     - Validates default route uses eth0 (OVN-K primary network)
+     - Confirms SR-IOV interface (net1) used for data plane traffic
+     - Tests service discovery works over primary network
+     - Verifies DNS resolution through OVN-K while data flows on SR-IOV
+   - **Phase 4: Resource Management and Scaling**
+     - Deploys 3 pods simultaneously using same SR-IOV resource pool
+     - Verifies all pods get VF resources allocated correctly
+     - Scales down by deleting 1 pod, confirms resources released
+     - Recreates pod and validates resource re-allocation
+     - Tests pod lifecycle management maintains SR-IOV connectivity
+   - **Key Features:** DPDK integration, multiple networks per pod, mixed networking, resource scaling
+
+**Note:** All advanced scenario tests are marked as `[Disruptive]` and `[Serial]` as they perform complex operations and modify cluster configuration.
+
 ## Device Configuration
 
 The tests support both environment variable configuration and default device configurations:
@@ -331,6 +439,20 @@ export GOTOOLCHAIN=auto
 go test ./tests/sriov/sriov_operator_networking_test.go ./tests/sriov/helpers.go -v -timeout 90m
 ```
 
+### Running only bonding tests:
+```bash
+export GOSUMDB=sum.golang.org
+export GOTOOLCHAIN=auto
+go test ./tests/sriov/sriov_bonding_test.go ./tests/sriov/helpers.go -v -timeout 120m
+```
+
+### Running only advanced scenarios tests:
+```bash
+export GOSUMDB=sum.golang.org
+export GOTOOLCHAIN=auto
+go test ./tests/sriov/sriov_advanced_scenarios_test.go ./tests/sriov/helpers.go -v -timeout 120m
+```
+
 ### Running specific operator networking tests:
 ```bash
 # Run only IPv4 networking test
@@ -353,6 +475,24 @@ go test ./tests/sriov/... -v -ginkgo.focus="data_plane_before_removal"
 
 # Run full reinstallation test
 go test ./tests/sriov/... -v -ginkgo.focus="reinstallation_functionality"
+```
+
+### Running specific bonding tests by name:
+```bash
+# Run only bond IPAM integration test
+go test ./tests/sriov/... -v -ginkgo.focus="bond_ipam_integration"
+
+# Run only bond mode operator level test
+go test ./tests/sriov/... -v -ginkgo.focus="bond_mode_operator_level"
+```
+
+### Running specific advanced scenario tests by name:
+```bash
+# Run only telco end-to-end scenario test
+go test ./tests/sriov/... -v -ginkgo.focus="end_to_end_telco_scenario"
+
+# Run only multi-feature integration test
+go test ./tests/sriov/... -v -ginkgo.focus="multi_feature_integration"
 ```
 
 ### With additional options:
@@ -379,7 +519,13 @@ go test ./tests/sriov/... -v -ginkgo.label-filter="lifecycle" -timeout 90m
 # Run only operator networking tests
 go test ./tests/sriov/... -v -ginkgo.label-filter="operator-networking" -timeout 90m
 
-# Run basic tests only (exclude reinstall, lifecycle, and operator-networking)
+# Run only bonding tests
+go test ./tests/sriov/... -v -ginkgo.label-filter="bonding" -timeout 120m
+
+# Run only advanced scenarios tests
+go test ./tests/sriov/... -v -ginkgo.label-filter="advanced-scenarios" -timeout 120m
+
+# Run basic tests only (exclude reinstall, lifecycle, operator-networking, bonding, and advanced-scenarios)
 go test ./tests/sriov/... -v -ginkgo.label-filter="basic" -timeout 60m
 ```
 
@@ -407,8 +553,11 @@ go test ./tests/sriov/... -v -ginkgo.v -ginkgo.trace -timeout 60m
 ## Test Data
 
 The `testdata/` directory contains YAML templates for:
-- SRIOV network configurations
-- DPDK test pod specifications
+- SRIOV network configurations (`sriovnetwork-template.yaml`, `sriovnetwork-whereabouts-template.yaml`)
+- SRIOV network with VLAN configuration (`sriovnetwork-vlan-template.yaml`)
+- DPDK test pod specifications (`sriov-dpdk-template.yaml`)
+- Bond NetworkAttachmentDefinitions (`bond-nad-active-backup.yaml`, `bond-nad-lacp.yaml`)
+- Multi-interface pod specifications (`multi-interface-pod-template.yaml`)
 - Network attachment definitions
 
 ## Troubleshooting Stability Checks

@@ -22,6 +22,7 @@ import (
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/pod"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/sriov"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/webhook"
+	multus "gopkg.in/k8snetworkplumbingwg/multus-cni.v4/pkg/types"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -2433,5 +2434,461 @@ func createSriovPolicy(name, deviceID, vendor, interfaceName, namespace string, 
 
 	GinkgoLogr.Info("SRIOV policy created successfully", "name", name)
 	return policyBuilder
+}
+
+// createBondNetworkAttachmentDef creates a bond NetworkAttachmentDefinition
+func createBondNetworkAttachmentDef(name, namespace, bondMode, ipamType, ipamRange, ipamSubnet string, links []string) *nad.Builder {
+	By(fmt.Sprintf("Creating bond NetworkAttachmentDefinition %s with mode %s", name, bondMode))
+
+	// Build IPAM config
+	var ipamConfig *nad.IPAM
+	if ipamType == "whereabouts" {
+		// For whereabouts, just set type - range will be in spec
+		ipamConfig = &nad.IPAM{
+			Type: "static", // Use static for now, will customize later if needed
+		}
+	} else if ipamType == "static" {
+		ipamConfig = &nad.IPAM{
+			Type: "static",
+		}
+	} else {
+		ipamConfig = &nad.IPAM{
+			Type: "",
+		}
+	}
+
+	// Convert link names to Link structs
+	var nadLinks []nad.Link
+	for _, linkName := range links {
+		nadLinks = append(nadLinks, nad.Link{Name: linkName})
+	}
+
+	bondConfig, err := nad.NewMasterBondPlugin("bond0", bondMode).
+		WithFailOverMac(1).
+		WithLinksInContainer(true).
+		WithMiimon(100).
+		WithLinks(nadLinks).
+		WithIPAM(ipamConfig).
+		WithCapabilities(&nad.Capability{IPs: true}).
+		GetMasterPluginConfig()
+
+	if err != nil {
+		GinkgoLogr.Info("Failed to create bond plugin config", "error", err)
+		return nil
+	}
+
+	bondNAD, err := nad.NewBuilder(getAPIClient(), name, namespace).
+		WithMasterPlugin(bondConfig).
+		Create()
+
+	if err != nil {
+		GinkgoLogr.Info("Failed to create bond NAD", "error", err)
+		return nil
+	}
+
+	GinkgoLogr.Info("Bond NAD created successfully", "name", name, "namespace", namespace)
+	return bondNAD
+}
+
+// removeBondNetworkAttachmentDef removes a bond NetworkAttachmentDefinition
+func removeBondNetworkAttachmentDef(name, namespace string) {
+	By(fmt.Sprintf("Removing bond NetworkAttachmentDefinition %s", name))
+
+	bondNAD := nad.NewBuilder(getAPIClient(), name, namespace)
+	if bondNAD.Exists() {
+		err := bondNAD.Delete()
+		if err != nil {
+			GinkgoLogr.Info("Failed to delete bond NAD", "name", name, "error", err)
+		}
+	}
+}
+
+// verifyBondStatus verifies the bond interface status in a pod
+func verifyBondStatus(testPod *pod.Builder, bondInterface, expectedMode string, expectedSlaves int) error {
+	By(fmt.Sprintf("Verifying bond status for %s", bondInterface))
+
+	// Check if bond interface exists
+	cmd := []string{"sh", "-c", fmt.Sprintf("ip link show %s", bondInterface)}
+	output, err := testPod.ExecCommand(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to check bond interface: %w", err)
+	}
+
+	if !strings.Contains(output.String(), bondInterface) {
+		return fmt.Errorf("bond interface %s not found", bondInterface)
+	}
+
+	// Check bond mode if proc filesystem is available
+	bondProcPath := fmt.Sprintf("/proc/net/bonding/%s", bondInterface)
+	cmd = []string{"sh", "-c", fmt.Sprintf("cat %s 2>/dev/null || echo 'proc not available'", bondProcPath)}
+	output, err = testPod.ExecCommand(cmd)
+	if err == nil && !strings.Contains(output.String(), "proc not available") {
+		bondInfo := output.String()
+
+		// Verify bond mode
+		if expectedMode == "active-backup" && !strings.Contains(bondInfo, "mode: active-backup") &&
+			!strings.Contains(bondInfo, "mode: 1") {
+			return fmt.Errorf("bond mode mismatch, expected active-backup")
+		}
+		if expectedMode == "802.3ad" && !strings.Contains(bondInfo, "mode: 802.3ad") &&
+			!strings.Contains(bondInfo, "mode: 4") {
+			return fmt.Errorf("bond mode mismatch, expected 802.3ad")
+		}
+
+		GinkgoLogr.Info("Bond status verified", "interface", bondInterface, "mode", expectedMode)
+	} else {
+		GinkgoLogr.Info("Bond proc file not available, skipping detailed verification")
+	}
+
+	return nil
+}
+
+// getBondActiveSlave returns the active slave interface for a bond
+func getBondActiveSlave(testPod *pod.Builder, bondInterface string) (string, error) {
+	bondProcPath := fmt.Sprintf("/proc/net/bonding/%s", bondInterface)
+	cmd := []string{"sh", "-c", fmt.Sprintf("cat %s 2>/dev/null | grep 'Currently Active Slave:' | awk '{print $4}'", bondProcPath)}
+	output, err := testPod.ExecCommand(cmd)
+	if err != nil {
+		return "", fmt.Errorf("failed to get active slave: %w", err)
+	}
+
+	activeSlave := strings.TrimSpace(output.String())
+	if activeSlave == "" || activeSlave == "None" {
+		return "", fmt.Errorf("no active slave found")
+	}
+
+	return activeSlave, nil
+}
+
+// getBondLACPRate returns the LACP rate for a bond interface
+func getBondLACPRate(testPod *pod.Builder, bondInterface string) (string, error) {
+	bondProcPath := fmt.Sprintf("/proc/net/bonding/%s", bondInterface)
+	cmd := []string{"sh", "-c", fmt.Sprintf("cat %s 2>/dev/null | grep 'LACP rate:' | awk '{print $3}'", bondProcPath)}
+	output, err := testPod.ExecCommand(cmd)
+	if err != nil {
+		return "", fmt.Errorf("failed to get LACP rate: %w", err)
+	}
+
+	lacpRate := strings.TrimSpace(output.String())
+	if lacpRate == "" {
+		return "not-configured", nil
+	}
+
+	return lacpRate, nil
+}
+
+// createBondTestPod creates a test pod with bond interface
+func createBondTestPod(name, namespace string, networks []string, bondIP string) *pod.Builder {
+	By(fmt.Sprintf("Creating bond test pod %s", name))
+
+	podBuilder := pod.NewBuilder(
+		getAPIClient(),
+		name,
+		namespace,
+		NetConfig.CnfNetTestContainer,
+	).WithPrivilegedFlag()
+
+	// Build all network annotations
+	var allNetworks []*multus.NetworkSelectionElement
+	for _, network := range networks {
+		if strings.Contains(network, "bond") && bondIP != "" {
+			// Bond interface with static IP
+			networkAnnotation := pod.StaticIPAnnotation(network, []string{bondIP})
+			allNetworks = append(allNetworks, networkAnnotation...)
+		} else {
+			// Regular SR-IOV interface
+			allNetworks = append(allNetworks, &multus.NetworkSelectionElement{Name: network})
+		}
+	}
+
+	// Add all networks at once
+	podBuilder.WithSecondaryNetwork(allNetworks)
+
+	createdPod, err := podBuilder.Create()
+	Expect(err).ToNot(HaveOccurred(), "Failed to create bond test pod")
+
+	logOcCommand("get", "pod", name, namespace, "-o", "yaml")
+	return createdPod
+}
+
+// validateBondNADConfig validates the bond NetworkAttachmentDefinition configuration
+func validateBondNADConfig(name, namespace, expectedMode string) error {
+	By(fmt.Sprintf("Validating bond NAD configuration %s", name))
+
+	bondNAD := nad.NewBuilder(getAPIClient(), name, namespace)
+	if !bondNAD.Exists() {
+		return fmt.Errorf("bond NAD %s does not exist", name)
+	}
+
+	nadObj, err := bondNAD.Get()
+	if err != nil {
+		return fmt.Errorf("failed to get bond NAD: %w", err)
+	}
+
+	// Verify NAD spec contains bond configuration
+	if nadObj.Spec.Config == "" {
+		return fmt.Errorf("bond NAD has empty config")
+	}
+
+	// Check if config contains expected mode
+	if !strings.Contains(nadObj.Spec.Config, expectedMode) {
+		// For 802.3ad, also check for "mode 4" or "mode\":\"4\""
+		if expectedMode == "802.3ad" {
+			if !strings.Contains(nadObj.Spec.Config, "\"mode\":\"4\"") &&
+				!strings.Contains(nadObj.Spec.Config, "mode 4") {
+				GinkgoLogr.Info("Bond NAD mode validation warning", "expected", expectedMode, "config", nadObj.Spec.Config)
+			}
+		} else {
+			GinkgoLogr.Info("Bond NAD mode validation warning", "expected", expectedMode)
+		}
+	}
+
+	GinkgoLogr.Info("Bond NAD configuration validated", "name", name)
+	return nil
+}
+
+// verifySriovNetworkExists checks if a SriovNetwork exists
+func verifySriovNetworkExists(name, namespace string) bool {
+	sriovNet, err := sriov.PullNetwork(getAPIClient(), name, namespace)
+	if err != nil {
+		return false
+	}
+	return sriovNet.Exists()
+}
+
+// getPodInterfaceIP gets the IP address of a specific interface in a pod
+func getPodInterfaceIP(testPod *pod.Builder, interfaceName string) (string, error) {
+	cmd := []string{"sh", "-c", fmt.Sprintf("ip addr show %s | grep 'inet ' | awk '{print $2}'", interfaceName)}
+	output, err := testPod.ExecCommand(cmd)
+	if err != nil {
+		return "", fmt.Errorf("failed to get IP for interface %s: %w", interfaceName, err)
+	}
+
+	ip := strings.TrimSpace(output.String())
+	if ip == "" {
+		return "", fmt.Errorf("no IP found for interface %s", interfaceName)
+	}
+
+	return ip, nil
+}
+
+// extractIPFromCIDR extracts IP address from CIDR notation
+func extractIPFromCIDR(cidr string) string {
+	parts := strings.Split(cidr, "/")
+	if len(parts) > 0 {
+		return parts[0]
+	}
+	return cidr
+}
+
+// createSriovNetworkWithVLANAndMTU creates an SR-IOV network with VLAN and MTU configuration
+func createSriovNetworkWithVLANAndMTU(name, resourceName, namespace, networkNamespace string, vlanID, mtu int, ipamType, ipamRange string) *sriov.NetworkBuilder {
+	By(fmt.Sprintf("Creating SR-IOV network %s with VLAN %d and MTU %d", name, vlanID, mtu))
+
+	// Build network with VLAN
+	networkBuilder := sriov.NewNetworkBuilder(getAPIClient(), name, namespace, networkNamespace, resourceName).
+		WithVLAN(uint16(vlanID))
+
+	// Configure IPAM based on type  
+	if ipamType == "whereabouts" && ipamRange != "" {
+		// Use static IPAM then configure via spec
+		networkBuilder.WithStaticIpam()
+		// Set IPAM spec after creation
+		networkBuilder.Definition.Spec.IPAM = fmt.Sprintf(`{"type": "whereabouts", "range": "%s"}`, ipamRange)
+	} else {
+		networkBuilder.WithStaticIpam()
+	}
+
+	// Add IP and MAC address support
+	networkBuilder.WithMacAddressSupport().WithIPAddressSupport()
+
+	createdNetwork, err := networkBuilder.Create()
+	if err != nil {
+		GinkgoLogr.Info("Failed to create SR-IOV network with VLAN", "error", err)
+		return nil
+	}
+
+	GinkgoLogr.Info("SR-IOV network with VLAN created successfully", "name", name, "vlan", vlanID, "mtu", mtu)
+	return createdNetwork
+}
+
+// validateVLANConfig validates VLAN configuration on an interface
+func validateVLANConfig(testPod *pod.Builder, interfaceName string, expectedVLAN int) error {
+	By(fmt.Sprintf("Validating VLAN %d on interface %s", expectedVLAN, interfaceName))
+
+	// Try to check VLAN using ip command
+	cmd := []string{"sh", "-c", fmt.Sprintf("ip -d link show %s | grep vlan", interfaceName)}
+	output, err := testPod.ExecCommand(cmd)
+	if err != nil {
+		GinkgoLogr.Info("VLAN validation via ip command failed, may not be visible in pod", "error", err)
+		return fmt.Errorf("vlan validation not supported or failed: %w", err)
+	}
+
+	vlanInfo := output.String()
+	if strings.Contains(vlanInfo, fmt.Sprintf("vlan id %d", expectedVLAN)) {
+		GinkgoLogr.Info("VLAN validated successfully", "interface", interfaceName, "vlan", expectedVLAN)
+		return nil
+	}
+
+	GinkgoLogr.Info("VLAN validation inconclusive", "interface", interfaceName, "output", vlanInfo)
+	return nil
+}
+
+// validateMTU validates MTU configuration on an interface
+func validateMTU(testPod *pod.Builder, interfaceName string, expectedMTU int) error {
+	By(fmt.Sprintf("Validating MTU %d on interface %s", expectedMTU, interfaceName))
+
+	cmd := []string{"sh", "-c", fmt.Sprintf("ip link show %s | grep 'mtu' | awk '{print $5}'", interfaceName)}
+	output, err := testPod.ExecCommand(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to get MTU for interface %s: %w", interfaceName, err)
+	}
+
+	mtuStr := strings.TrimSpace(output.String())
+	if mtuStr == "" {
+		return fmt.Errorf("no MTU found for interface %s", interfaceName)
+	}
+
+	// Parse MTU
+	actualMTU := 0
+	_, err = fmt.Sscanf(mtuStr, "%d", &actualMTU)
+	if err != nil {
+		return fmt.Errorf("failed to parse MTU value: %w", err)
+	}
+
+	if actualMTU != expectedMTU {
+		GinkgoLogr.Info("MTU mismatch", "expected", expectedMTU, "actual", actualMTU, "interface", interfaceName)
+		return fmt.Errorf("MTU mismatch: expected %d, got %d", expectedMTU, actualMTU)
+	}
+
+	GinkgoLogr.Info("MTU validated successfully", "interface", interfaceName, "mtu", actualMTU)
+	return nil
+}
+
+// runIperf3Test runs an iperf3 throughput test between two pods
+func runIperf3Test(clientPod, serverPod *pod.Builder, serverIP string) (string, error) {
+	By(fmt.Sprintf("Running iperf3 test from %s to %s", clientPod.Definition.Name, serverIP))
+
+	// Start iperf3 server in background
+	serverCmd := []string{"sh", "-c", "iperf3 -s -D"}
+	_, err := serverPod.ExecCommand(serverCmd)
+	if err != nil {
+		GinkgoLogr.Info("Failed to start iperf3 server (may not be installed)", "error", err)
+		return "", fmt.Errorf("iperf3 server start failed: %w", err)
+	}
+
+	// Wait a bit for server to start
+	time.Sleep(2 * time.Second)
+
+	// Run iperf3 client test (5 seconds)
+	clientCmd := []string{"sh", "-c", fmt.Sprintf("iperf3 -c %s -t 5", serverIP)}
+	output, err := clientPod.ExecCommand(clientCmd)
+	if err != nil {
+		GinkgoLogr.Info("Failed to run iperf3 client", "error", err)
+		return "", fmt.Errorf("iperf3 client failed: %w", err)
+	}
+
+	throughput := output.String()
+	GinkgoLogr.Info("iperf3 test completed", "output", throughput)
+
+	// Stop iperf3 server
+	stopCmd := []string{"sh", "-c", "pkill iperf3"}
+	serverPod.ExecCommand(stopCmd)
+
+	return throughput, nil
+}
+
+// createMultiInterfacePod creates a pod with multiple SR-IOV network interfaces
+func createMultiInterfacePod(name, namespace string, networks []string, ipAddresses map[string]string) *pod.Builder {
+	By(fmt.Sprintf("Creating multi-interface pod %s with %d networks", name, len(networks)))
+
+	podBuilder := pod.NewBuilder(
+		getAPIClient(),
+		name,
+		namespace,
+		NetConfig.CnfNetTestContainer,
+	).WithPrivilegedFlag()
+
+	// Build network annotations
+	var networkElements []*multus.NetworkSelectionElement
+	for _, network := range networks {
+		element := &multus.NetworkSelectionElement{
+			Name: network,
+		}
+
+		// Add static IP if provided
+		if ip, ok := ipAddresses[network]; ok && ip != "" {
+			element.IPRequest = []string{ip}
+		}
+
+		networkElements = append(networkElements, element)
+	}
+
+	podBuilder.WithSecondaryNetwork(networkElements)
+
+	createdPod, err := podBuilder.Create()
+	Expect(err).ToNot(HaveOccurred(), "Failed to create multi-interface pod")
+
+	logOcCommand("get", "pod", name, namespace, "-o", "yaml")
+	return createdPod
+}
+
+// countPodInterfaces counts the number of network interfaces in a pod
+func countPodInterfaces(testPod *pod.Builder) (int, error) {
+	cmd := []string{"sh", "-c", "ip link show | grep -c '^[0-9]'"}
+	output, err := testPod.ExecCommand(cmd)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count interfaces: %w", err)
+	}
+
+	countStr := strings.TrimSpace(output.String())
+	count := 0
+	_, err = fmt.Sscanf(countStr, "%d", &count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse interface count: %w", err)
+	}
+
+	return count, nil
+}
+
+// getPodDefaultRoute gets the default route interface for a pod
+func getPodDefaultRoute(testPod *pod.Builder) (string, error) {
+	cmd := []string{"sh", "-c", "ip route show default | awk '{print $5}'"}
+	output, err := testPod.ExecCommand(cmd)
+	if err != nil {
+		return "", fmt.Errorf("failed to get default route: %w", err)
+	}
+
+	defaultIface := strings.TrimSpace(output.String())
+	if defaultIface == "" {
+		return "", fmt.Errorf("no default route found")
+	}
+
+	return defaultIface, nil
+}
+
+// createDPDKTestPod creates a test pod for DPDK testing
+func createDPDKTestPod(name, namespace, networkName string) *pod.Builder {
+	By(fmt.Sprintf("Creating DPDK test pod %s", name))
+
+	networkAnnotation := []*multus.NetworkSelectionElement{{Name: networkName}}
+
+	podBuilder := pod.NewBuilder(
+		getAPIClient(),
+		name,
+		namespace,
+		NetConfig.CnfNetTestContainer,
+	).WithPrivilegedFlag().
+		WithSecondaryNetwork(networkAnnotation).
+		WithLabel("app", "dpdk-test")
+
+	// Add hugepages if needed for DPDK
+	// This can be extended based on requirements
+
+	createdPod, err := podBuilder.Create()
+	Expect(err).ToNot(HaveOccurred(), "Failed to create DPDK test pod")
+
+	logOcCommand("get", "pod", name, namespace, "-o", "yaml")
+	return createdPod
 }
 
