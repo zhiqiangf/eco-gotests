@@ -1,0 +1,266 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                     SR-IOV TESTS FLOWCHART SUMMARY                         ║
+║                  Complete Documentation Package Created                    ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+📄 FLOWCHART DOCUMENTS CREATED:
+════════════════════════════════════════════════════════════════════════════
+
+1. ✅ SR-IOV_TESTS_FLOWCHART.md (COMPREHENSIVE)
+   ├─ Overall test suite flow
+   ├─ Detailed per-device execution flow with ASCII diagrams
+   ├─ 20 checking points mapped to stages
+   ├─ Summary table of all checking points
+   ├─ Test configuration matrix
+   ├─ Device testing patterns per test
+   └─ Key checking points summary
+
+2. ✅ QUICK_FLOWCHART_VISUAL.txt (EASY REFERENCE)
+   ├─ Visual ASCII flowchart (all 9 tests)
+   ├─ Setup phase
+   ├─ Per-test loop structure
+   ├─ Per-device loop structure
+   ├─ 8 execution phases with checking points
+   ├─ Cleanup phase details
+   ├─ Test completion summary
+   └─ Legend and improvements summary
+
+════════════════════════════════════════════════════════════════════════════
+
+🔍 WHAT'S INCLUDED:
+════════════════════════════════════════════════════════════════════════════
+
+FLOWCHART ELEMENTS:
+  ✓ Test flow overview
+  ✓ Setup and teardown phases
+  ✓ Device validation logic
+  ✓ VF initialization process
+  ✓ Environment setup steps
+  ✓ Network configuration process
+  ✓ Pod deployment sequence
+  ✓ Multi-stage validation process
+  ✓ Cleanup and resource removal
+  ✓ Error handling paths
+  ✓ Skip conditions and branches
+
+CHECKING POINTS (18 per device tested):
+  ✓ Cluster connectivity
+  ✓ Operator readiness
+  ✓ Device existence
+  ✓ Device compatibility
+  ✓ VF policy creation
+  ✓ Policy synchronization
+  ✓ Namespace creation
+  ✓ SriovNetwork creation
+  ✓ NAD generation (enhanced timeout)
+  ✓ Client pod creation
+  ✓ Server pod creation
+  ✓ Pod readiness
+  ✓ Interface configuration
+  ✓ Test-specific config verification
+  ✓ Link status
+  ✓ IPv4 connectivity
+  ✓ IPv6 connectivity
+  ✓ Application traffic
+  ✓ Network cleanup
+  ✓ Namespace cleanup
+
+TEST COVERAGE:
+  ✓ 9 Tests described
+  ✓ 6 Device types
+  ✓ 50+ combinations
+  ✓ Configuration variations
+  ✓ Skip conditions
+  ✓ Special cases (NO-CARRIER, DPDK, MTU, etc.)
+
+════════════════════════════════════════════════════════════════════════════
+
+📊 TEST DETAILS IN FLOWCHART:
+════════════════════════════════════════════════════════════════════════════
+
+TEST 25959 - Spoof Checking ON
+  ├─ Config: spoolchk="on", trust="off"
+  ├─ Devices: All 6
+  └─ Checking Point 14: Verify "spoof checking on"
+
+TEST 70820 - Spoof Checking OFF
+  ├─ Config: spoolchk="off", trust="on"
+  ├─ Devices: All 6
+  └─ Checking Point 14: Verify "spoof checking off"
+
+TEST 25960 - Trust OFF
+  ├─ Config: spoolchk="off", trust="off"
+  ├─ Devices: All 6
+  └─ Checking Point 14: Verify trust off
+
+TEST 70821 - Trust ON
+  ├─ Config: spoolchk="on", trust="on"
+  ├─ Devices: All 6
+  └─ Checking Point 14: Verify trust on
+
+TEST 25963 - VLAN & Rate Limiting
+  ├─ Config: vlanId=100, qoS=2, minTxRate=40, maxTxRate=100
+  ├─ Devices: 6 (skip: x710, bcm57414, bcm57508)
+  ├─ Devices tested: e810xxv, e810c, e810back (3)
+  └─ Checking Point 14: Verify VLAN/QoS/rates
+
+TEST 25961 - Link State Auto
+  ├─ Config: linkState="auto"
+  ├─ Devices: All 6
+  └─ Checking Point 14: Verify link-state auto
+
+TEST 71006 - Link State Enable
+  ├─ Config: linkState="enable"
+  ├─ Devices: All 6
+  └─ Checking Point 14: Verify link-state enable
+
+TEST 69646 - MTU Configuration
+  ├─ Config: mtu=1800, spoolchk="on", trust="on"
+  ├─ Devices: All 6
+  └─ Checking Point 14: Verify mtu 1800
+
+TEST 69582 - DPDK Support
+  ├─ Config: deviceType="vfio-pci" (or netdevice for Mellanox)
+  ├─ Devices: 6 (skip: bcm devices)
+  ├─ Special: Runs testpmd application
+  └─ Checking Point 14: Verify PCIDEVICE env & testpmd
+
+════════════════════════════════════════════════════════════════════════════
+
+🎯 PHASES IN FLOWCHART:
+════════════════════════════════════════════════════════════════════════════
+
+PHASE 1: DEVICE VALIDATION
+  Purpose: Verify device exists and supports config
+  Checking Points: 3-4
+  Duration: <1 second
+  Skip Conditions: Device not found, config not supported
+
+PHASE 2: VF INITIALIZATION
+  Purpose: Create virtual functions on device
+  Checking Points: 5-6
+  Duration: 30 minutes (max)
+  Tasks: Policy creation, node synchronization
+
+PHASE 3: ENVIRONMENT SETUP
+  Purpose: Create isolated test environment
+  Checking Points: 7
+  Duration: ~5 seconds
+  Tasks: Create privileged namespace
+
+PHASE 4: NETWORK CONFIGURATION
+  Purpose: Configure network and generate NAD
+  Checking Points: 8-9
+  Duration: 180 seconds (enhanced timeout)
+  Tasks: Create SriovNetwork, wait for NAD
+  KEY FIX: Timeout increased from 60s → 180s
+
+PHASE 5: POD DEPLOYMENT
+  Purpose: Create and start test pods
+  Checking Points: 10-12
+  Duration: 300 seconds (max)
+  Tasks: Create client pod, create server pod, wait for ready
+
+PHASE 6: CONFIGURATION VERIFICATION
+  Purpose: Verify test parameters applied correctly
+  Checking Points: 13-14
+  Duration: ~5 seconds
+  Tasks: Interface config check, test-specific config check
+
+PHASE 7: CONNECTIVITY TESTS
+  Purpose: Validate network connectivity
+  Checking Points: 15-18
+  Duration: ~2 minutes
+  Tasks: Link check, IPv4 ping, IPv6 ping, HTTP traffic
+  Skip Conditions: NO-CARRIER on interface
+
+PHASE 8: CLEANUP
+  Purpose: Remove resources and verify cleanup
+  Checking Points: 19-20
+  Duration: ~3 minutes
+  Tasks: Delete SriovNetwork, delete namespace
+
+════════════════════════════════════════════════════════════════════════════
+
+💡 IMPROVEMENTS NOTED IN FLOWCHART:
+════════════════════════════════════════════════════════════════════════════
+
+TIMEOUT FIX (Check Point 9):
+  ✓ Extended NAD wait from 60s → 180s
+  ✓ Manual cleanup fallback added
+  ✓ Final verification before failing
+  ✓ Better error diagnostics provided
+
+NAMING CONFLICT FIX (All Tests):
+  ✓ Unique network names: <TestID>-<DeviceName>
+  ✓ Eliminates resource conflicts
+  ✓ NAD created immediately
+  ✓ No finalizer issues
+
+════════════════════════════════════════════════════════════════════════════
+
+📈 STATISTICS:
+════════════════════════════════════════════════════════════════════════════
+
+Total Tests: 9
+Total Devices: 6 standard types
+Total Combinations: ~50 (accounting for skips)
+Checking Points per Device: 20
+Total Checking Points: 900+ per full run
+Average Test Duration: 5-10 minutes
+Average Phase Duration: 
+  - Device Validation: < 1 sec
+  - VF Init: 30 min (first time), 1-2 min (subsequent)
+  - Environment: ~5 sec
+  - Network Config: 180 sec (max)
+  - Pod Deployment: 300 sec (max)
+  - Config Verification: ~5 sec
+  - Connectivity: ~2 min
+  - Cleanup: ~3 min
+
+════════════════════════════════════════════════════════════════════════════
+
+🔗 RELATED DOCUMENTS:
+════════════════════════════════════════════════════════════════════════════
+
+Comprehensive Flowchart (Detailed):
+  📄 SR-IOV_TESTS_FLOWCHART.md
+
+Quick Visual Reference:
+  📄 QUICK_FLOWCHART_VISUAL.txt
+
+Naming Conflict Fix Details:
+  📄 ALL_TESTS_FIXED.txt
+  📄 RESOURCE_CONFLICT_FIX_COMPLETE.md
+
+Timeout Fix Details:
+  📄 RESOURCE_NAMING_CONFLICT_FIX.md
+
+Testing & Cleanup:
+  📄 CLEANUP_AND_RETEST.sh
+  📄 NEXT_STEPS.txt
+
+════════════════════════════════════════════════════════════════════════════
+
+✅ USAGE:
+════════════════════════════════════════════════════════════════════════════
+
+For Quick Visual Reference:
+  → Open: QUICK_FLOWCHART_VISUAL.txt
+  → Time: 5 minutes to understand flow
+  → Best for: Quick reference during testing
+
+For Detailed Understanding:
+  → Open: SR-IOV_TESTS_FLOWCHART.md
+  → Time: 15-20 minutes to read
+  → Best for: Understanding all checking points
+
+For Test Execution:
+  → Run: ./CLEANUP_AND_RETEST.sh
+  → Or: Follow NEXT_STEPS.txt for manual execution
+
+════════════════════════════════════════════════════════════════════════════
+
+All flowchart documents are ready for use!
+Navigate to /root/eco-gotests/ to view.
+

@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	machineconfigv1 "github.com/openshift/api/machineconfiguration/v1"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/clients"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/nad"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/namespace"
@@ -92,21 +94,320 @@ func getAPIClient() *clients.Settings {
 }
 
 // IsSriovDeployed checks if SRIOV is deployed
-func IsSriovDeployed(client *clients.Settings, config *NetworkConfig) error {
-	// Simple implementation - in real scenario this would check for SRIOV operator
+func IsSriovDeployed(apiClient *clients.Settings, config *NetworkConfig) error {
+	GinkgoLogr.Info("Checking if SR-IOV operator is deployed", "namespace", config.SriovOperatorNamespace)
+
+	// Check if the SR-IOV operator pods are running in the namespace
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Check for operator pods
+	podList := &corev1.PodList{}
+	err := apiClient.Client.List(ctx, podList, &client.ListOptions{
+		Namespace: config.SriovOperatorNamespace,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list pods in SR-IOV operator namespace %s: %w", config.SriovOperatorNamespace, err)
+	}
+
+	if len(podList.Items) == 0 {
+		return fmt.Errorf("no operator pods found in namespace %s - SR-IOV operator may not be deployed", config.SriovOperatorNamespace)
+	}
+
+	// Check if at least one pod is running
+	hasRunningPod := false
+	for _, pod := range podList.Items {
+		if pod.Status.Phase == corev1.PodRunning {
+			hasRunningPod = true
+			GinkgoLogr.Info("Found running SR-IOV operator pod", "pod", pod.Name, "namespace", pod.Namespace)
+			break
+		}
+	}
+
+	if !hasRunningPod {
+		return fmt.Errorf("no running SR-IOV operator pods found in namespace %s", config.SriovOperatorNamespace)
+	}
+
+	// Verify SR-IOV CRDs are available by attempting to list SriovNetwork resources
+	sriovNetworks, err := sriov.List(apiClient, config.SriovOperatorNamespace, client.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list SriovNetwork resources: %w - SR-IOV CRDs may not be installed", err)
+	}
+
+	GinkgoLogr.Info("SR-IOV operator is deployed and ready",
+		"namespace", config.SriovOperatorNamespace,
+		"operator_pods", len(podList.Items),
+		"sriov_networks", len(sriovNetworks))
+
 	return nil
 }
 
 // WaitForSriovAndMCPStable waits for SRIOV and MCP to be stable
-func WaitForSriovAndMCPStable(client *clients.Settings, timeout time.Duration, interval time.Duration, mcpLabel, sriovOpNs string) error {
-	// Simple implementation - in real scenario this would wait for conditions
-	time.Sleep(5 * time.Second)
+func WaitForSriovAndMCPStable(apiClient *clients.Settings, timeout time.Duration, interval time.Duration, mcpLabel, sriovOpNs string) error {
+	GinkgoLogr.Info("Waiting for SR-IOV and MCP to be stable", "timeout", timeout, "interval", interval, "mcp_label", mcpLabel)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	err := wait.PollUntilContextCancel(ctx, interval, false, func(ctx context.Context) (bool, error) {
+		// Verify SR-IOV operator is running by checking for SR-IOV node states
+		// This confirms the operator is active and monitoring nodes
+		nodeStates, err := sriov.ListNetworkNodeState(apiClient, sriovOpNs, client.ListOptions{})
+		if err != nil {
+			GinkgoLogr.Info("Error listing SR-IOV network node states", "error", err)
+			return false, nil // Retry on error
+		}
+
+		// Validate SR-IOV sync status for all node states
+		if len(nodeStates) == 0 {
+			GinkgoLogr.Info("WAITING: No SR-IOV node states available yet",
+				"reason", "Operator still initializing",
+				"suggestion", "Check operator readiness with: oc get deployment -n openshift-sriov-network-operator",
+				"diagnostic_cmd", "oc get sriovnetworknodestates -n openshift-sriov-network-operator")
+			return false, nil // Retry - node states not yet available
+		}
+
+		GinkgoLogr.Info("INFO: SR-IOV node states found", "count", len(nodeStates),
+			"next_check", "Validate each node sync status")
+
+		allNodesSynced := true
+		for _, nodeState := range nodeStates {
+			syncStatus := "Unknown"
+			nodeName := "unknown"
+
+			if nodeState.Objects != nil {
+				syncStatus = nodeState.Objects.Status.SyncStatus
+				nodeName = nodeState.Objects.Name
+
+				if syncStatus != "Succeeded" {
+					GinkgoLogr.Info("WAITING: SR-IOV node not yet synced",
+						"node", nodeName,
+						"syncStatus", syncStatus,
+						"diagnostic_cmd", fmt.Sprintf("oc describe sriovnetworknodestate %s -n openshift-sriov-network-operator", nodeName))
+					allNodesSynced = false
+				} else {
+					GinkgoLogr.Info("OK: Node SR-IOV sync complete", "node", nodeName)
+				}
+			}
+		}
+
+		if !allNodesSynced {
+			GinkgoLogr.Info("RETRYING: Some nodes still syncing",
+				"diagnostic_cmd", "oc get sriovnetworknodestates -n openshift-sriov-network-operator -o wide")
+			return false, nil // Retry - wait for all nodes to sync
+		}
+
+		// Attempt to check MachineConfigPool conditions to ensure config is stable
+		// Note: MachineConfigPoolList may not be registered in the client scheme depending on eco-goinfra version
+		// We use it if available, but gracefully fall back to SR-IOV node state sync check
+		mcpList := &machineconfigv1.MachineConfigPoolList{}
+		listOpts := &client.ListOptions{}
+
+		err = apiClient.Client.List(ctx, mcpList, listOpts)
+		if err != nil {
+			// If MCP check fails (e.g., type not registered), log and continue
+			// SR-IOV node state sync status is sufficient as a proxy for MCP stability
+			if strings.Contains(err.Error(), "no kind is registered") {
+				GinkgoLogr.Info("INFO: MachineConfigPool check unavailable in scheme",
+					"fallback", "Using SR-IOV node state sync as stability indicator",
+					"verify_mcp_manually", "oc get mcp -o wide")
+			} else {
+				// For other errors, retry
+				GinkgoLogr.Info("TEMPORARY ERROR: Could not list MachineConfigPools",
+					"error", err.Error(),
+					"diagnostic_cmd", "oc get mcp worker -o yaml")
+				return false, nil
+			}
+		} else {
+			// MCP check succeeded, verify conditions
+			GinkgoLogr.Info("INFO: MachineConfigPool check available",
+				"next_check", "Verify worker pool is Updated and not Degraded")
+			allPoolsUpdated := true
+			for _, pool := range mcpList.Items {
+				// Check if pool matches the provided MCP label selector
+				// Parse mcpLabel (e.g., "machineconfiguration.openshift.io/role=worker")
+				// and check if pool has the matching label
+				shouldCheck := false
+				if mcpLabel == "" {
+					// No label filter - check all pools
+					shouldCheck = true
+				} else {
+					// Parse label (format: "key=value")
+					parts := strings.SplitN(mcpLabel, "=", 2)
+					if len(parts) == 2 {
+						labelKey := parts[0]
+						labelValue := parts[1]
+						if pool.Labels != nil {
+							if val, ok := pool.Labels[labelKey]; ok && val == labelValue {
+								shouldCheck = true
+							}
+						}
+					}
+				}
+				if !shouldCheck {
+					continue
+				}
+
+				// Check for Updated=True condition
+				isUpdated := false
+
+				for _, condition := range pool.Status.Conditions {
+					if condition.Type == machineconfigv1.MachineConfigPoolUpdated && condition.Status == corev1.ConditionTrue {
+						isUpdated = true
+						GinkgoLogr.Info("OK: MachineConfigPool condition met", "pool", pool.Name, "condition", "Updated=True")
+					}
+					if condition.Type == machineconfigv1.MachineConfigPoolDegraded && condition.Status == corev1.ConditionTrue {
+						GinkgoLogr.Info("WAITING: MachineConfigPool is degraded",
+							"pool", pool.Name,
+							"reason", condition.Reason,
+							"message", condition.Message,
+							"diagnostic_cmd", "oc describe mcp worker")
+						allPoolsUpdated = false
+					}
+				}
+
+				if !isUpdated {
+					GinkgoLogr.Info("WAITING: MachineConfigPool not yet updated",
+						"pool", pool.Name,
+						"suggestion", "Wait for machine-config-operator to complete update",
+						"diagnostic_cmd", "oc get machineconfig -o wide")
+					allPoolsUpdated = false
+				}
+			}
+
+			if !allPoolsUpdated {
+				GinkgoLogr.Info("RETRYING: MachineConfigPool not ready",
+					"diagnostic_cmd", "oc get mcp -o wide")
+				return false, nil // Retry - wait for MCP to be updated
+			}
+
+			GinkgoLogr.Info("OK: All MachineConfigPools are stable")
+		}
+
+		// Check node conditions for worker nodes to ensure they are stable
+		GinkgoLogr.Info("INFO: Checking worker node readiness",
+			"diagnostic_cmd", "oc get nodes -L node-role.kubernetes.io/worker")
+		nodeList := &corev1.NodeList{}
+		err = apiClient.Client.List(ctx, nodeList, &client.ListOptions{})
+		if err != nil {
+			GinkgoLogr.Info("TEMPORARY ERROR: Could not list nodes",
+				"error", err.Error(),
+				"diagnostic_cmd", "oc get nodes -o wide")
+			return false, nil // Retry on error
+		}
+
+		allNodesReady := true
+		readyNodeCount := 0
+		for _, node := range nodeList.Items {
+			// Check if this is a worker node
+			if _, isWorker := node.Labels["node-role.kubernetes.io/worker"]; !isWorker {
+				continue
+			}
+
+			// Verify node is Ready
+			isReady := false
+			for _, condition := range node.Status.Conditions {
+				if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
+					isReady = true
+					readyNodeCount++
+					GinkgoLogr.Info("OK: Worker node is Ready", "node", node.Name)
+					break
+				}
+				// Check for pressure conditions that indicate instability
+				if (condition.Type == corev1.NodeMemoryPressure || condition.Type == corev1.NodeDiskPressure) &&
+					condition.Status == corev1.ConditionTrue {
+					GinkgoLogr.Info("WAITING: Worker node has resource pressure",
+						"node", node.Name,
+						"condition", condition.Type,
+						"suggestion", "Cluster may be under resource stress",
+						"diagnostic_cmd", "oc top node "+node.Name)
+					allNodesReady = false
+					return false, nil // Retry
+				}
+			}
+
+			if !isReady {
+				GinkgoLogr.Info("WAITING: Worker node is not yet Ready",
+					"node", node.Name,
+					"diagnostic_cmd", "oc describe node "+node.Name)
+				allNodesReady = false
+				return false, nil // Retry
+			}
+		}
+
+		if !allNodesReady {
+			GinkgoLogr.Info("RETRYING: Some worker nodes not ready",
+				"diagnostic_cmd", "oc get nodes -o wide")
+			return false, nil // Retry
+		}
+
+		GinkgoLogr.Info("SUCCESS: All stability checks passed",
+			"sr_iov_nodes_synced", len(nodeStates),
+			"worker_nodes_ready", readyNodeCount,
+			"final_verification", "oc get sriovnetworks -A && oc get mcp")
+		return true, nil
+	})
+
+	if err != nil && err != context.DeadlineExceeded {
+		return fmt.Errorf("failed waiting for SRIOV and MCP stability: %w", err)
+	}
+
+	if err == context.DeadlineExceeded {
+		return fmt.Errorf("timeout waiting for SRIOV and MCP to be stable after %v", timeout)
+	}
+
 	return nil
 }
 
 // CleanAllNetworksByTargetNamespace cleans all networks by target namespace
-func CleanAllNetworksByTargetNamespace(client *clients.Settings, sriovOpNs, targetNs string) error {
-	// Simple implementation - in real scenario this would clean up networks
+func CleanAllNetworksByTargetNamespace(apiClient *clients.Settings, sriovOpNs, targetNs string) error {
+	GinkgoLogr.Info("Cleaning up SR-IOV networks for target namespace", "namespace", targetNs, "operator_namespace", sriovOpNs)
+
+	// List all SriovNetwork resources in the operator namespace
+	sriovNetworks, err := sriov.List(apiClient, sriovOpNs, client.ListOptions{})
+	if err != nil {
+		GinkgoLogr.Info("Error listing SR-IOV networks", "error", err)
+		// Don't fail if we can't list networks - just log and continue
+		return nil
+	}
+
+	networksCleaned := 0
+	for _, network := range sriovNetworks {
+		// Check if this network targets the given namespace
+		// SR-IOV networks have a networkNamespace field that indicates the target namespace
+		if network.Definition.Spec.NetworkNamespace != targetNs {
+			continue
+		}
+
+		GinkgoLogr.Info("Deleting SR-IOV network", "network", network.Definition.Name, "namespace", sriovOpNs, "target_namespace", targetNs)
+
+		// Delete the SriovNetwork CR
+		err := network.Delete()
+		if err != nil && !strings.Contains(err.Error(), "NotFound") {
+			GinkgoLogr.Info("Error deleting SR-IOV network", "network", network.Definition.Name, "error", err)
+			continue
+		}
+
+		networksCleaned++
+
+		// Also delete the corresponding NetworkAttachmentDefinition in the target namespace
+		nadName := network.Definition.Name
+		nadBuilder := nad.NewBuilder(apiClient, nadName, targetNs)
+		if nadBuilder.Exists() {
+			GinkgoLogr.Info("Deleting NetworkAttachmentDefinition", "nad", nadName, "namespace", targetNs)
+			err := nadBuilder.Delete()
+			if err != nil && !strings.Contains(err.Error(), "NotFound") {
+				GinkgoLogr.Info("Error deleting NetworkAttachmentDefinition", "nad", nadName, "error", err)
+				// Continue even if NAD deletion fails
+			}
+		}
+	}
+
+	GinkgoLogr.Info("Cleanup complete", "networks_cleaned", networksCleaned, "target_namespace", targetNs)
+
+	// Give the cluster a moment to process deletions
+	time.Sleep(2 * time.Second)
+
 	return nil
 }
 
@@ -171,7 +472,7 @@ func chkSriovOperatorStatus(sriovOpNs string) {
 func waitForSriovPolicyReady(sriovOpNs string) {
 	By("Waiting for SRIOV policy to be ready")
 	err := WaitForSriovAndMCPStable(
-		getAPIClient(), 35*time.Minute, time.Minute, NetConfig.CnfMcpLabel, sriovOpNs)
+		getAPIClient(), 20*time.Minute, 30*time.Second, NetConfig.CnfMcpLabel, sriovOpNs)
 	Expect(err).ToNot(HaveOccurred(), "SRIOV policy is not ready")
 }
 
@@ -375,7 +676,7 @@ func initVF(name, deviceID, interfaceName, vendor, sriovOpNs string, vfNum int, 
 
 		// Wait for policy to be applied
 		err = WaitForSriovAndMCPStable(
-			getAPIClient(), 35*time.Minute, time.Minute, NetConfig.CnfMcpLabel, sriovOpNs)
+			getAPIClient(), 20*time.Minute, 30*time.Second, NetConfig.CnfMcpLabel, sriovOpNs)
 		if err != nil {
 			GinkgoLogr.Info("Failed to wait for SRIOV policy to be applied", "error", err, "node", node.Definition.Name)
 			// Clean up policy if wait fails
@@ -424,7 +725,7 @@ func initDpdkVF(name, deviceID, interfaceName, vendor, sriovOpNs string, vfNum i
 
 		// Wait for policy to be applied
 		err = WaitForSriovAndMCPStable(
-			getAPIClient(), 35*time.Minute, time.Minute, NetConfig.CnfMcpLabel, sriovOpNs)
+			getAPIClient(), 20*time.Minute, 30*time.Second, NetConfig.CnfMcpLabel, sriovOpNs)
 		if err != nil {
 			GinkgoLogr.Info("Failed to wait for DPDK SRIOV policy", "error", err, "node", node.Definition.Name)
 			// Clean up failed policy before retrying on next node
@@ -453,16 +754,7 @@ func (sn *sriovNetwork) createSriovNetwork() {
 		sn.resourceName,
 	).WithStaticIpam().WithMacAddressSupport().WithIPAddressSupport().WithLogLevel("debug")
 
-	// Set optional parameters
-	// Note: WithSpoofChk method may not be available in this version
-	// if sn.spoolchk != "" {
-	//	if sn.spoolchk == "on" {
-	//		networkBuilder.WithSpoofChk(true)
-	//	} else {
-	//		networkBuilder.WithSpoofChk(false)
-	//	}
-	// }
-
+	// Set optional parameters (spoof check is configured in the template)
 	if sn.trust != "" {
 		if sn.trust == "on" {
 			networkBuilder.WithTrustFlag(true)
@@ -1015,7 +1307,9 @@ func getPciAddress(namespace, podName, policyName string) string {
 
 // getRandomString generates a random string for unique naming
 func getRandomString() string {
-	return fmt.Sprintf("%d", time.Now().Unix())
+	// Combine timestamp with random component to avoid collisions in parallel test execution
+	// Using just Unix timestamp can cause collisions when tests run in rapid succession
+	return fmt.Sprintf("%d-%d", time.Now().Unix(), rand.Intn(10000))
 }
 
 // logOcCommand logs the equivalent oc/kubectl command for debugging

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -81,15 +80,28 @@ func getDefaultDeviceConfig() []deviceConfig {
 
 // getDeviceConfig returns device configuration from environment variable or defaults
 func getDeviceConfig() []deviceConfig {
+	envDevices := os.Getenv("SRIOV_DEVICES")
 	if devices := parseDeviceConfig(); len(devices) > 0 {
 		return devices
+	}
+	if envDevices != "" {
+		panic(fmt.Sprintf("SRIOV_DEVICES is set to %q but no valid entries could be parsed; expected format: name:deviceid:vendor:interface", envDevices))
 	}
 	return getDefaultDeviceConfig()
 }
 
+// getVFNum returns the number of virtual functions to create, configurable via SRIOV_VF_NUM env var
+func getVFNum() int {
+	if vfNumStr := os.Getenv("SRIOV_VF_NUM"); vfNumStr != "" {
+		if vfNum, err := strconv.Atoi(vfNumStr); err == nil && vfNum > 0 {
+			return vfNum
+		}
+	}
+	return 2 // default
+}
+
 var (
-	_, currentFile, _, _ = runtime.Caller(0)
-	testNS               *namespace.Builder
+	testNS *namespace.Builder
 )
 
 // getTestNS returns the test namespace, initializing it if necessary
@@ -109,7 +121,7 @@ func TestSriovBasic(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	By("Cleaning up leftover resources from previous failed test runs")
+	By("Cleaning up leftover resources from previous test runs")
 	cleanupLeftoverResources(getAPIClient(), NetConfig.SriovOperatorNamespace)
 
 	By("Creating test namespace with privileged labels")
@@ -151,7 +163,7 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 		buildPruningBaseDir  = filepath.Join("testdata", "networking", "sriov")
 		sriovNetworkTemplate = filepath.Join(buildPruningBaseDir, "sriovnetwork-whereabouts-template.yaml")
 		sriovOpNs            = NetConfig.SriovOperatorNamespace
-		vfNum                = 2
+		vfNum                = getVFNum()
 		workerNodes          []*nodes.Builder
 	)
 
@@ -180,6 +192,7 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 
 	It("Author:zzhao-Medium-NonPreRelease-Longduration-25959-SR-IOV VF with spoof checking enabled [Disruptive] [Serial]", func() {
 		var caseID = "25959-"
+		executed := false
 
 		for _, data := range testData {
 			data := data
@@ -189,6 +202,7 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 			if !result {
 				continue
 			}
+			executed = true
 			func() {
 				ns1 := "e2e-" + caseID + data.Name
 				// Create unique network name with test case ID to avoid conflicts between tests
@@ -234,10 +248,14 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 
 			}()
 		}
+		if !executed {
+			Skip("No SR-IOV devices matched the requested configuration")
+		}
 	})
 
 	It("Author:zzhao-Medium-NonPreRelease-Longduration-70820-SR-IOV VF with spoof checking disabled [Disruptive] [Serial]", func() {
 		var caseID = "70820-"
+		executed := false
 
 		for _, data := range testData {
 			data := data
@@ -247,6 +265,7 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 			if !result {
 				continue
 			}
+			executed = true
 			func() {
 				ns1 := "e2e-" + caseID + data.Name
 				// Create unique network name with test case ID to avoid conflicts between tests
@@ -291,10 +310,14 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 				chkVFStatusWithPassTraffic(sriovnetwork.name, data.InterfaceName, ns1, "spoof checking off")
 			}()
 		}
+		if !executed {
+			Skip("No SR-IOV devices matched the requested configuration")
+		}
 	})
 
 	It("Author:zzhao-Medium-NonPreRelease-Longduration-25960-SR-IOV VF with trust disabled [Disruptive] [Serial]", func() {
 		var caseID = "25960-"
+		executed := false
 
 		for _, data := range testData {
 			data := data
@@ -304,6 +327,7 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 			if !result {
 				continue
 			}
+			executed = true
 			func() {
 				ns1 := "e2e-" + caseID + data.Name
 				// Create unique network name with test case ID to avoid conflicts between tests
@@ -349,10 +373,14 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 
 			}()
 		}
+		if !executed {
+			Skip("No SR-IOV devices matched the requested configuration")
+		}
 	})
 
 	It("Author:zzhao-Medium-NonPreRelease-Longduration-70821-SR-IOV VF with trust enabled [Disruptive] [Serial]", func() {
 		var caseID = "70821-"
+		executed := false
 
 		for _, data := range testData {
 			data := data
@@ -362,6 +390,7 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 			if !result {
 				continue
 			}
+			executed = true
 			func() {
 				ns1 := "e2e-" + caseID + data.Name
 				// Create unique network name with test case ID to avoid conflicts between tests
@@ -407,10 +436,14 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 
 			}()
 		}
+		if !executed {
+			Skip("No SR-IOV devices matched the requested configuration")
+		}
 	})
 
 	It("Author:zzhao-Medium-NonPreRelease-Longduration-25963-SR-IOV VF with VLAN and rate limiting configuration [Disruptive] [Serial]", func() {
 		var caseID = "25963-"
+		executed := false
 
 		for _, data := range testData {
 			data := data
@@ -425,6 +458,7 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 			if !result {
 				continue
 			}
+			executed = true
 			func() {
 				ns1 := "e2e-" + caseID + data.Name
 				// Create unique network name with test case ID to avoid conflicts between tests
@@ -472,10 +506,14 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 
 			}()
 		}
+		if !executed {
+			Skip("No SR-IOV devices matched the requested configuration")
+		}
 	})
 
 	It("Author:zzhao-Medium-NonPreRelease-Longduration-25961-SR-IOV VF with auto link state [Disruptive] [Serial]", func() {
 		var caseID = "25961-"
+		executed := false
 
 		for _, data := range testData {
 			data := data
@@ -485,6 +523,7 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 			if !result {
 				continue
 			}
+			executed = true
 			func() {
 				ns1 := "e2e-" + caseID + data.Name
 				// Create unique network name with test case ID to avoid conflicts between tests
@@ -529,10 +568,14 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 
 			}()
 		}
+		if !executed {
+			Skip("No SR-IOV devices matched the requested configuration")
+		}
 	})
 
 	It("Author:zzhao-Medium-NonPreRelease-Longduration-71006-SR-IOV VF with enabled link state [Disruptive] [Serial]", func() {
 		var caseID = "71006-"
+		executed := false
 
 		for _, data := range testData {
 			data := data
@@ -542,6 +585,7 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 			if !result {
 				continue
 			}
+			executed = true
 			func() {
 				ns1 := "e2e-" + caseID + data.Name
 				// Create unique network name with test case ID to avoid conflicts between tests
@@ -586,11 +630,15 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 
 			}()
 		}
+		if !executed {
+			Skip("No SR-IOV devices matched the requested configuration")
+		}
 
 	})
 
 	It("Author:yingwang-Medium-NonPreRelease-Longduration-69646-MTU configuration for SR-IOV policy [Disruptive] [Serial]", func() {
 		var caseID = "69646-"
+		executed := false
 
 		for _, data := range testData {
 			data := data
@@ -600,6 +648,7 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 			if !result {
 				continue
 			}
+			executed = true
 			//configure mtu in sriovnetworknodepolicy
 			mtuValue := 1800
 			By(fmt.Sprintf("Updating SRIOV policy %s with MTU %d", data.Name, mtuValue))
@@ -681,10 +730,14 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 
 			}()
 		}
+		if !executed {
+			Skip("No SR-IOV devices matched the requested configuration")
+		}
 	})
 
 	It("Author:yingwang-Medium-NonPreRelease-Longduration-69582-DPDK SR-IOV VF functionality validation [Disruptive] [Serial]", func() {
 		var caseID = "69582-"
+		executed := false
 
 		for _, data := range testData {
 			data := data
@@ -700,6 +753,7 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 			if !result {
 				continue
 			}
+			executed = true
 			func() {
 				ns1 := "e2e-" + caseID + data.Name
 				// Create namespace for the test
@@ -781,10 +835,13 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 				Expect(podNetAnnotation).To(ContainSubstring("pci-address"), "Network status should contain PCI address")
 				Expect(podNetAnnotation).To(ContainSubstring(pciAddress), "Network status should contain the assigned PCI address")
 
-				sriovTestPod.deleteSriovTestPod()
+			sriovTestPod.deleteSriovTestPod()
 
-			}()
-		}
-	})
+		}()
+	}
+	if !executed {
+		Skip("No SR-IOV devices matched the requested configuration")
+	}
+})
 
 })

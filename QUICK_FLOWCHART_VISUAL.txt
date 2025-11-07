@@ -1,0 +1,260 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║              SR-IOV TESTS - QUICK VISUAL FLOWCHART                          ║
+║              (All 9 Tests Follow This Common Flow)                          ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃                        TEST EXECUTION FLOW                                 ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║ SETUP PHASE                                                                ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+    ┌─────────────────────────────────────────────────────────┐
+    │  ✓ CHECK: Cluster Connected                           │
+    │  ✓ CHECK: SR-IOV Operator Running                      │
+    │  ✓ CHECK: All 4 Operator Components Ready              │
+    └────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+    ┌─────────────────────────────────────────────────────────┐
+    │  Load Test Data:                                        │
+    │  • 9 Test Cases (25959, 70820, 25960, etc.)           │
+    │  • 6 Device Types (e810xxv, e810c, x710, etc.)        │
+    │  • Test-Specific Configurations                        │
+    └────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║ PER-TEST LOOP (Repeat for each of 9 tests)                                ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+    ┌─────────────────────────────────────────────────────────┐
+    │  TEST SELECTION:                                        │
+    │  ├─ TEST 25959: Spoof Checking ON                      │
+    │  ├─ TEST 70820: Spoof Checking OFF                     │
+    │  ├─ TEST 25960: Trust OFF                              │
+    │  ├─ TEST 70821: Trust ON                               │
+    │  ├─ TEST 25963: VLAN + Rate Limiting                   │
+    │  ├─ TEST 25961: Link State Auto                        │
+    │  ├─ TEST 71006: Link State Enable                      │
+    │  ├─ TEST 69646: MTU Configuration                      │
+    │  └─ TEST 69582: DPDK Support                           │
+    └────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║ PER-DEVICE LOOP (Repeat for each device in test data)                     ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+DEVICE VALIDATION PHASE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ├─ Loop through: e810xxv, e810c, x710, bcm57414, bcm57508, e810back
+    │
+    ├─► ✓ CHECK 3: Device Exists on Workers?
+    │   └─► oc get sriovnetworknodestates
+    │   └─► If NO → SKIP device, continue to next
+    │
+    ├─► ✓ CHECK 4: Device Supports This Test Config?
+    │   └─► Device-specific checks (e.g., no bcm for TEST 5)
+    │   └─► If NO → SKIP device, continue to next
+    │
+    └─► Device validated ✓
+
+
+VF INITIALIZATION PHASE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ├─► ✓ CHECK 5: Create SriovNetworkNodePolicy
+    │   ├─ Resource: <TestID>-<DeviceName> (NEW NAMING FIX!)
+    │   ├─ numVfs: 2
+    │   └─ Command: oc apply -f policy.yaml
+    │
+    ├─► ✓ CHECK 6: Wait for Policy Ready (Succeeded)
+    │   ├─ Poll: sriovnetworknodestates
+    │   ├─ Timeout: 30 minutes
+    │   ├─ Poll interval: 10 seconds
+    │   └─ Expected status: "Succeeded"
+    │
+    └─► VF initialized ✓
+
+
+ENVIRONMENT SETUP PHASE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ├─► ✓ CHECK 7: Create Test Namespace
+    │   ├─ Namespace: e2e-<TestID>-<DeviceName>
+    │   ├─ Set privileged: true
+    │   └─ Verify: namespace ready
+    │
+    └─► Namespace ready ✓
+
+
+NETWORK CONFIGURATION PHASE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ├─► ✓ CHECK 8: Create SriovNetwork CR
+    │   ├─ Network Name: <TestID>-<DeviceName> (UNIQUE!)
+    │   ├─ Resource Name: <DeviceName>
+    │   ├─ Target Namespace: e2e-<TestID>-<DeviceName>
+    │   ├─ Test-Specific Params:
+    │   │  • TEST 1/4: spoolchk, trust
+    │   │  • TEST 5: vlanId, qoS, minTxRate, maxTxRate
+    │   │  • TEST 6/7: linkState
+    │   │  • TEST 8: mtu
+    │   │  • TEST 9: deviceType (vfio-pci)
+    │   └─ Command: oc apply -f network.yaml
+    │
+    ├─► ✓ CHECK 9: Wait for NAD Creation (NEW ENHANCEMENT!)
+    │   ├─ Monitor: NetworkAttachmentDefinition
+    │   ├─ Location: e2e-<TestID>-<DeviceName> namespace
+    │   ├─ Timeout: 180 seconds (increased from 60s)
+    │   ├─ Poll interval: 3 seconds
+    │   ├─ Manual cleanup: if timeout, attempt delete
+    │   └─ Final verify: before failing
+    │
+    └─► Network ready ✓
+
+
+POD DEPLOYMENT PHASE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ├─► ✓ CHECK 10: Create Client Pod
+    │   ├─ Name: client
+    │   ├─ Network: net1 (NAD)
+    │   ├─ IP: 192.168.1.10/24
+    │   ├─ MAC: 20:04:0f:f1:88:01
+    │   └─ Verify: pod exists
+    │
+    ├─► ✓ CHECK 11: Create Server Pod
+    │   ├─ Name: server
+    │   ├─ Network: net1 (NAD)
+    │   ├─ IP: 192.168.1.11/24
+    │   ├─ MAC: 20:04:0f:f1:88:02
+    │   └─ Verify: pod exists
+    │
+    ├─► ✓ CHECK 12: Wait for Pods Ready
+    │   ├─ Phase: Running
+    │   ├─ Condition: Ready = True
+    │   ├─ Timeout: 300 seconds
+    │   └─ Check: BOTH client & server
+    │
+    └─► Pods ready ✓
+
+
+VALIDATION PHASE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ├─► ✓ CHECK 13: Verify Interface Configuration
+    │   ├─ Get MAC from pod: ip link show net1
+    │   └─ Verify: MAC matches assignment
+    │
+    ├─► ✓ CHECK 14: Verify Test-Specific Configuration
+    │   ├─ TEST 1/4: Check spoofchk (on/off), trust (on/off)
+    │   ├─ TEST 5: Verify VLAN=100, QoS=2, rates
+    │   ├─ TEST 6/7: Verify link-state (auto/enable)
+    │   ├─ TEST 8: Verify MTU=1800
+    │   └─ TEST 9: Verify PCIDEVICE env & testpmd running
+    │
+    ├─► ✓ CHECK 15: Check Link Status
+    │   ├─ If NO-CARRIER: Skip traffic tests
+    │   │  (Expected for x710, bcm57508)
+    │   └─ Otherwise: Proceed to traffic tests
+    │
+    ├─► ✓ CHECK 16: IPv4 Connectivity Test
+    │   ├─ Extract server IPv4 from net1
+    │   ├─ Ping: ping -c 3 <IPv4>
+    │   ├─ Verify: 3 packets received
+    │   └─ Timeout: 30 seconds
+    │
+    ├─► ✓ CHECK 17: IPv6 Connectivity Test
+    │   ├─ Extract server IPv6 from net1
+    │   ├─ Ping: ping6 -c 3 <IPv6>
+    │   ├─ Verify: 3 packets received
+    │   └─ Timeout: 30 seconds
+    │
+    ├─► ✓ CHECK 18: HTTP/Application Traffic Test
+    │   ├─ Bidirectional communication
+    │   ├─ Port 8080
+    │   └─ Verify: Connection successful
+    │
+    └─► ✓ TEST PASSED ✓
+
+
+CLEANUP PHASE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ├─► ✓ CHECK 19: Remove SriovNetwork
+    │   ├─ Name: <TestID>-<DeviceName>
+    │   ├─ Command: oc delete sriovnetwork
+    │   ├─ Timeout (enhanced): 180 seconds
+    │   ├─ Verify: NAD also deleted from namespace
+    │   └─ Manual cleanup: if timeout, attempt force delete
+    │
+    ├─► ✓ CHECK 20: Delete Test Namespace
+    │   ├─ Command: oc delete ns e2e-<TestID>-<DeviceName>
+    │   ├─ Timeout: 30 seconds
+    │   └─ Verify: namespace removed
+    │
+    └─► Cleanup complete ✓
+
+
+                          CONTINUE TO NEXT DEVICE
+                                    │
+                                    ▼
+                    (Loop back to DEVICE VALIDATION)
+
+
+                     AFTER ALL DEVICES FOR THIS TEST:
+                              CONTINUE TO NEXT TEST
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║ TEST COMPLETION SUMMARY                                                    ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+After all 9 tests complete:
+
+    RESULTS:
+    ├─ Tests Passed: X/9
+    ├─ Devices Tested: 50+ combinations
+    ├─ Total Checking Points: 900+
+    ├─ Resources Cleaned Up: ✓
+    └─ Overall Status: PASSED / FAILED
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║ KEY IMPROVEMENTS FROM FIXES APPLIED                                        ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+✅ TIMEOUT FIX (helpers.go):
+   • CHECK 9 timeout extended: 60s → 180s
+   • Manual cleanup fallback added
+   • Better error diagnostics
+
+✅ NAMING CONFLICT FIX (sriov_basic_test.go):
+   • All 9 tests use unique network names
+   • Format: <TestID>-<DeviceName> (e.g., 25959-cx7anl244)
+   • Eliminates resource conflicts
+   • NAD creation succeeds immediately
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║ LEGEND                                                                      ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+    ✓ CHECK    = Validation/Assertion Point
+    ┌─────────┐ = Process/Stage
+    ├─►        = Sub-step
+    ▼          = Flow direction
+    └─►        = Branch/Optional
+    ✓ PASSED   = Test successful
+    ❌ FAILED   = Test failed
+
+

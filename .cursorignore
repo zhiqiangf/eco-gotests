@@ -1,0 +1,70 @@
+# Project-Local Cursor Ignore Rules
+# This file is specific to /root/eco-gotests/
+# Only affects Cursor in this project
+
+# Vendor directory - too large
+vendor/
+
+# Generated files
+*.out
+*.test
+*.prof
+
+# Build artifacts
+bin/
+dist/
+build/
+
+# Documentation (unless specifically needed for context)
+*.md
+!README.md
+!tests/sriov/README.md
+
+# IDE files (not relevant to SR-IOV context)
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git files
+.git/
+.gitignore
+.gitattributes
+
+# Temporary files
+*.tmp
+*.log
+*.pid
+
+# Test coverage
+*.cover
+coverage/
+
+# Dependency files (Cursor doesn't need these)
+go.mod
+go.sum
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Config files not related to SR-IOV
+config/
+.config/
+
+# Container/OCP unrelated
+docker/
+k8s/
+charts/
+
+# Keep these for Cursor context
+!tests/sriov/**/*.go
+!tests/sriov/testdata/**
+!.cursor/**
+
