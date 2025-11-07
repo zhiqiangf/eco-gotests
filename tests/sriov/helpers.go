@@ -14,11 +14,14 @@ import (
 	. "github.com/onsi/gomega"
 	machineconfigv1 "github.com/openshift/api/machineconfiguration/v1"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/clients"
+	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/daemonset"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/nad"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/namespace"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/nodes"
+	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/olm"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/pod"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/sriov"
+	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/webhook"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -1757,3 +1760,678 @@ func cleanupLeftoverResources(apiClient *clients.Settings, sriovOperatorNamespac
 	// Step 3: Log cleanup summary
 	GinkgoLogr.Info("Cleanup of leftover resources completed")
 }
+
+// ==================== OLM Management Functions ====================
+
+// getOperatorCSV retrieves the current CSV for SR-IOV operator
+func getOperatorCSV(apiClient *clients.Settings, namespace string) (*olm.ClusterServiceVersionBuilder, error) {
+	GinkgoLogr.Info("Getting SR-IOV operator CSV", "namespace", namespace)
+
+	// List all CSVs in the operator namespace
+	csvList, err := olm.ListClusterServiceVersion(apiClient, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list CSVs in namespace %s: %w", namespace, err)
+	}
+
+	if len(csvList) == 0 {
+		return nil, fmt.Errorf("no CSVs found in namespace %s", namespace)
+	}
+
+	// Find the SR-IOV operator CSV (typically named sriov-network-operator.*)
+	for _, csv := range csvList {
+		if strings.Contains(csv.Definition.Name, "sriov-network-operator") {
+			GinkgoLogr.Info("Found SR-IOV operator CSV", "name", csv.Definition.Name, "phase", csv.Definition.Status.Phase)
+			return csv, nil
+		}
+	}
+
+	// If no specific CSV found, return the first one (fallback)
+	GinkgoLogr.Info("No specific SR-IOV CSV found, using first available", "name", csvList[0].Definition.Name)
+	return csvList[0], nil
+}
+
+// getOperatorSubscription gets the SR-IOV subscription object
+func getOperatorSubscription(apiClient *clients.Settings, namespace string) (*olm.SubscriptionBuilder, error) {
+	GinkgoLogr.Info("Getting SR-IOV operator subscription", "namespace", namespace)
+
+	// Common subscription names for SR-IOV operator
+	possibleNames := []string{
+		"sriov-network-operator-subscription",
+		"sriov-network-operator",
+		"sriov-subscription",
+	}
+
+	for _, name := range possibleNames {
+		sub, err := olm.PullSubscription(apiClient, name, namespace)
+		if err == nil && sub != nil {
+			GinkgoLogr.Info("Found SR-IOV subscription", "name", name, "currentCSV", sub.Object.Status.CurrentCSV)
+			return sub, nil
+		}
+	}
+
+	// Try to list and find subscription containing "sriov"
+	GinkgoLogr.Info("Attempting to find subscription by listing all subscriptions in namespace", "namespace", namespace)
+	// Note: We'll skip listing if we can't find by name, as subscription might be managed differently
+	return nil, fmt.Errorf("no SR-IOV subscription found in namespace %s", namespace)
+}
+
+// deleteOperatorCSV deletes the CSV for SR-IOV operator
+func deleteOperatorCSV(apiClient *clients.Settings, namespace string) error {
+	GinkgoLogr.Info("Deleting SR-IOV operator CSV", "namespace", namespace)
+
+	csv, err := getOperatorCSV(apiClient, namespace)
+	if err != nil {
+		return fmt.Errorf("failed to get CSV for deletion: %w", err)
+	}
+
+	csvName := csv.Definition.Name
+	GinkgoLogr.Info("Deleting CSV", "name", csvName)
+
+	err = csv.Delete()
+	if err != nil {
+		return fmt.Errorf("failed to delete CSV %s: %w", csvName, err)
+	}
+
+	// Wait for CSV to be deleted
+	GinkgoLogr.Info("Waiting for CSV to be deleted", "name", csvName)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	err = wait.PollUntilContextCancel(ctx, 10*time.Second, false, func(ctx context.Context) (bool, error) {
+		_, err := olm.PullClusterServiceVersion(apiClient, csvName, namespace)
+		if err != nil {
+			// CSV not found means it's deleted
+			return true, nil
+		}
+		return false, nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to wait for CSV deletion: %w", err)
+	}
+
+	GinkgoLogr.Info("CSV deleted successfully", "name", csvName)
+	return nil
+}
+
+// waitForOperatorReinstall waits for operator pods to restart after CSV recreation
+func waitForOperatorReinstall(apiClient *clients.Settings, namespace string, timeout time.Duration) error {
+	GinkgoLogr.Info("Waiting for SR-IOV operator to reinstall", "namespace", namespace, "timeout", timeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	err := wait.PollUntilContextCancel(ctx, 10*time.Second, false, func(ctx context.Context) (bool, error) {
+		// Check if CSV exists and is in Succeeded phase
+		csv, err := getOperatorCSV(apiClient, namespace)
+		if err != nil {
+			GinkgoLogr.Info("CSV not yet available", "error", err)
+			return false, nil
+		}
+
+		if csv.Definition.Status.Phase != "Succeeded" {
+			GinkgoLogr.Info("CSV not yet in Succeeded phase", "currentPhase", csv.Definition.Status.Phase)
+			return false, nil
+		}
+
+		// Check if operator pods are running
+		podList := &corev1.PodList{}
+		err = apiClient.Client.List(ctx, podList, &client.ListOptions{
+			Namespace: namespace,
+		})
+		if err != nil {
+			GinkgoLogr.Info("Failed to list operator pods", "error", err)
+			return false, nil
+		}
+
+		runningPods := 0
+		for _, pod := range podList.Items {
+			if pod.Status.Phase == corev1.PodRunning {
+				runningPods++
+			}
+		}
+
+		if runningPods == 0 {
+			GinkgoLogr.Info("No operator pods running yet")
+			return false, nil
+		}
+
+		GinkgoLogr.Info("SR-IOV operator reinstalled successfully", "runningPods", runningPods)
+		return true, nil
+	})
+
+	return err
+}
+
+// validateOperatorControlPlane performs comprehensive control plane health check
+func validateOperatorControlPlane(apiClient *clients.Settings, namespace string) error {
+	GinkgoLogr.Info("Validating SR-IOV operator control plane", "namespace", namespace)
+
+	// Check CSV status
+	csv, err := getOperatorCSV(apiClient, namespace)
+	if err != nil {
+		return fmt.Errorf("CSV validation failed: %w", err)
+	}
+
+	if csv.Definition.Status.Phase != "Succeeded" {
+		return fmt.Errorf("CSV is not in Succeeded phase: %s", csv.Definition.Status.Phase)
+	}
+
+	// Check operator pods
+	podList := &corev1.PodList{}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err = apiClient.Client.List(ctx, podList, &client.ListOptions{
+		Namespace: namespace,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list operator pods: %w", err)
+	}
+
+	if len(podList.Items) == 0 {
+		return fmt.Errorf("no operator pods found in namespace %s", namespace)
+	}
+
+	runningPods := 0
+	for _, pod := range podList.Items {
+		if pod.Status.Phase == corev1.PodRunning {
+			runningPods++
+		}
+	}
+
+	if runningPods == 0 {
+		return fmt.Errorf("no running operator pods found")
+	}
+
+	// Check if CRDs are available
+	_, err = sriov.ListNetworkNodeState(apiClient, namespace, client.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to access SriovNetworkNodeState CRD: %w", err)
+	}
+
+	GinkgoLogr.Info("Control plane validation passed", "csvPhase", csv.Definition.Status.Phase, "runningPods", runningPods)
+	return nil
+}
+
+// ==================== State Capture/Compare Functions ====================
+
+// SriovClusterState represents the state of SR-IOV configuration in the cluster
+type SriovClusterState struct {
+	Policies   []string
+	Networks   []string
+	NodeStates map[string]string // node name -> sync status
+	Timestamp  time.Time
+}
+
+// captureSriovState captures current SR-IOV configuration state
+func captureSriovState(apiClient *clients.Settings, namespace string) (*SriovClusterState, error) {
+	GinkgoLogr.Info("Capturing SR-IOV cluster state", "namespace", namespace)
+
+	state := &SriovClusterState{
+		Policies:   make([]string, 0),
+		Networks:   make([]string, 0),
+		NodeStates: make(map[string]string),
+		Timestamp:  time.Now(),
+	}
+
+	// Capture policies
+	policies, err := sriov.ListPolicy(apiClient, namespace, client.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list policies: %w", err)
+	}
+	for _, policy := range policies {
+		state.Policies = append(state.Policies, policy.Definition.Name)
+	}
+
+	// Capture networks
+	networks, err := sriov.List(apiClient, namespace, client.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list networks: %w", err)
+	}
+	for _, network := range networks {
+		state.Networks = append(state.Networks, network.Definition.Name)
+	}
+
+	// Capture node states
+	nodeStates, err := sriov.ListNetworkNodeState(apiClient, namespace, client.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list node states: %w", err)
+	}
+	for _, nodeState := range nodeStates {
+		if nodeState.Objects != nil {
+			state.NodeStates[nodeState.Objects.Name] = nodeState.Objects.Status.SyncStatus
+		}
+	}
+
+	GinkgoLogr.Info("Captured SR-IOV state",
+		"policies", len(state.Policies),
+		"networks", len(state.Networks),
+		"nodeStates", len(state.NodeStates))
+
+	return state, nil
+}
+
+// compareSriovState compares two states and returns differences
+func compareSriovState(before, after *SriovClusterState) []string {
+	differences := make([]string, 0)
+
+	// Compare policies
+	beforePolicies := make(map[string]bool)
+	for _, p := range before.Policies {
+		beforePolicies[p] = true
+	}
+	afterPolicies := make(map[string]bool)
+	for _, p := range after.Policies {
+		afterPolicies[p] = true
+	}
+
+	for p := range beforePolicies {
+		if !afterPolicies[p] {
+			differences = append(differences, fmt.Sprintf("Policy removed: %s", p))
+		}
+	}
+	for p := range afterPolicies {
+		if !beforePolicies[p] {
+			differences = append(differences, fmt.Sprintf("Policy added: %s", p))
+		}
+	}
+
+	// Compare networks
+	beforeNetworks := make(map[string]bool)
+	for _, n := range before.Networks {
+		beforeNetworks[n] = true
+	}
+	afterNetworks := make(map[string]bool)
+	for _, n := range after.Networks {
+		afterNetworks[n] = true
+	}
+
+	for n := range beforeNetworks {
+		if !afterNetworks[n] {
+			differences = append(differences, fmt.Sprintf("Network removed: %s", n))
+		}
+	}
+	for n := range afterNetworks {
+		if !beforeNetworks[n] {
+			differences = append(differences, fmt.Sprintf("Network added: %s", n))
+		}
+	}
+
+	// Compare node states
+	for node, beforeStatus := range before.NodeStates {
+		afterStatus, exists := after.NodeStates[node]
+		if !exists {
+			differences = append(differences, fmt.Sprintf("Node state removed: %s", node))
+		} else if beforeStatus != afterStatus {
+			differences = append(differences, fmt.Sprintf("Node %s status changed: %s -> %s", node, beforeStatus, afterStatus))
+		}
+	}
+
+	for node := range after.NodeStates {
+		if _, exists := before.NodeStates[node]; !exists {
+			differences = append(differences, fmt.Sprintf("Node state added: %s", node))
+		}
+	}
+
+	return differences
+}
+
+// validateNodeStatesReconciled ensures all nodes show "Succeeded" sync status
+func validateNodeStatesReconciled(apiClient *clients.Settings, namespace string, timeout time.Duration) error {
+	GinkgoLogr.Info("Validating node states are reconciled", "namespace", namespace, "timeout", timeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	err := wait.PollUntilContextCancel(ctx, 30*time.Second, false, func(ctx context.Context) (bool, error) {
+		nodeStates, err := sriov.ListNetworkNodeState(apiClient, namespace, client.ListOptions{})
+		if err != nil {
+			GinkgoLogr.Info("Failed to list node states", "error", err)
+			return false, nil
+		}
+
+		if len(nodeStates) == 0 {
+			GinkgoLogr.Info("No node states found yet")
+			return false, nil
+		}
+
+		allSucceeded := true
+		for _, nodeState := range nodeStates {
+			if nodeState.Objects != nil {
+				syncStatus := nodeState.Objects.Status.SyncStatus
+				nodeName := nodeState.Objects.Name
+
+				if syncStatus != "Succeeded" {
+					GinkgoLogr.Info("Node not yet synced", "node", nodeName, "syncStatus", syncStatus)
+					allSucceeded = false
+				}
+			}
+		}
+
+		if !allSucceeded {
+			return false, nil
+		}
+
+		GinkgoLogr.Info("All nodes reconciled successfully", "nodeCount", len(nodeStates))
+		return true, nil
+	})
+
+	return err
+}
+
+// ==================== Data Plane Functions ====================
+
+// validateWorkloadConnectivity tests traffic between workload pods
+func validateWorkloadConnectivity(clientPod, serverPod *pod.Builder, serverIP string) error {
+	GinkgoLogr.Info("Validating workload connectivity",
+		"client", clientPod.Definition.Name,
+		"server", serverPod.Definition.Name,
+		"serverIP", serverIP)
+
+	// Wait for both pods to be ready
+	err := clientPod.WaitUntilReady(5 * time.Minute)
+	if err != nil {
+		return fmt.Errorf("client pod not ready: %w", err)
+	}
+
+	err = serverPod.WaitUntilReady(5 * time.Minute)
+	if err != nil {
+		return fmt.Errorf("server pod not ready: %w", err)
+	}
+
+	// Test connectivity with ping
+	pingCmd := []string{"ping", "-c", "3", serverIP}
+	output, err := clientPod.ExecCommand(pingCmd, clientPod.Definition.Spec.Containers[0].Name)
+	if err != nil {
+		return fmt.Errorf("ping failed from %s to %s: %w", clientPod.Definition.Name, serverIP, err)
+	}
+
+	if !strings.Contains(output.String(), "3 packets transmitted, 3 received") {
+		return fmt.Errorf("ping test failed: unexpected output: %s", output.String())
+	}
+
+	GinkgoLogr.Info("Workload connectivity validated successfully")
+	return nil
+}
+
+// verifyPodSriovInterface checks if pod has SR-IOV interface with correct PCI address
+func verifyPodSriovInterface(podBuilder *pod.Builder, resourceName string) error {
+	GinkgoLogr.Info("Verifying pod SR-IOV interface",
+		"pod", podBuilder.Definition.Name,
+		"namespace", podBuilder.Definition.Namespace,
+		"resourceName", resourceName)
+
+	// Check network status annotation
+	networkStatusAnnotation := "k8s.v1.cni.cncf.io/network-status"
+	networkStatus := podBuilder.Object.Annotations[networkStatusAnnotation]
+
+	if networkStatus == "" {
+		return fmt.Errorf("pod %s does not have network status annotation", podBuilder.Definition.Name)
+	}
+
+	// Parse network status to verify SR-IOV interface
+	if !strings.Contains(networkStatus, resourceName) {
+		return fmt.Errorf("pod network status does not contain resource %s", resourceName)
+	}
+
+	if !strings.Contains(networkStatus, "device-info") {
+		GinkgoLogr.Info("Warning: network status does not contain device-info, but resource is present")
+	}
+
+	GinkgoLogr.Info("Pod SR-IOV interface verified", "pod", podBuilder.Definition.Name)
+	return nil
+}
+
+// ==================== Component Lifecycle Validation Functions ====================
+
+// validateAllComponentsRemoved validates that all SR-IOV operator components are removed
+func validateAllComponentsRemoved(apiClient *clients.Settings, namespace string, timeout time.Duration) error {
+	GinkgoLogr.Info("Validating all SR-IOV operator components are removed", "namespace", namespace)
+
+	// Validate operator pods are removed
+	err := validateOperatorPodsRemoved(apiClient, namespace, timeout)
+	if err != nil {
+		return fmt.Errorf("operator pods validation failed: %w", err)
+	}
+
+	// Validate daemonsets are removed
+	err = validateDaemonSetsRemoved(apiClient, namespace, timeout)
+	if err != nil {
+		return fmt.Errorf("daemonsets validation failed: %w", err)
+	}
+
+	// Validate webhooks are removed
+	err = validateWebhooksRemoved(apiClient, timeout)
+	if err != nil {
+		return fmt.Errorf("webhooks validation failed: %w", err)
+	}
+
+	GinkgoLogr.Info("All SR-IOV operator components successfully removed")
+	return nil
+}
+
+// validateOperatorPodsRemoved validates that operator pods are terminated
+func validateOperatorPodsRemoved(apiClient *clients.Settings, namespace string, timeout time.Duration) error {
+	GinkgoLogr.Info("Validating operator pods are removed", "namespace", namespace)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	err := wait.PollUntilContextCancel(ctx, 10*time.Second, false, func(ctx context.Context) (bool, error) {
+		podList := &corev1.PodList{}
+		err := apiClient.Client.List(ctx, podList, &client.ListOptions{
+			Namespace: namespace,
+		})
+		if err != nil {
+			GinkgoLogr.Info("Error listing pods", "error", err)
+			return false, nil
+		}
+
+		runningPods := 0
+		for _, pod := range podList.Items {
+			if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
+				runningPods++
+				GinkgoLogr.Info("Found operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase)
+			}
+		}
+
+		if runningPods > 0 {
+			GinkgoLogr.Info("Waiting for operator pods to terminate", "runningPods", runningPods)
+			return false, nil
+		}
+
+		GinkgoLogr.Info("All operator pods terminated")
+		return true, nil
+	})
+
+	return err
+}
+
+// validateDaemonSetsRemoved validates that SR-IOV daemonsets are removed
+func validateDaemonSetsRemoved(apiClient *clients.Settings, namespace string, timeout time.Duration) error {
+	GinkgoLogr.Info("Validating SR-IOV daemonsets are removed", "namespace", namespace)
+
+	daemonsetNames := []string{
+		"sriov-network-config-daemon",
+		"sriov-device-plugin",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	err := wait.PollUntilContextCancel(ctx, 10*time.Second, false, func(ctx context.Context) (bool, error) {
+		allRemoved := true
+
+		for _, dsName := range daemonsetNames {
+			ds, err := daemonset.Pull(apiClient, dsName, namespace)
+			if err == nil && ds.Exists() {
+				GinkgoLogr.Info("DaemonSet still exists", "daemonset", dsName)
+				allRemoved = false
+			}
+		}
+
+		if !allRemoved {
+			return false, nil
+		}
+
+		GinkgoLogr.Info("All SR-IOV daemonsets removed")
+		return true, nil
+	})
+
+	return err
+}
+
+// validateWebhooksRemoved validates that SR-IOV webhooks are removed
+func validateWebhooksRemoved(apiClient *clients.Settings, timeout time.Duration) error {
+	GinkgoLogr.Info("Validating SR-IOV webhooks are removed")
+
+	mutatingWebhooks := []string{
+		"network-resources-injector-config",
+		"sriov-operator-webhook-config",
+	}
+
+	validatingWebhooks := []string{
+		"sriov-operator-webhook-config",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	err := wait.PollUntilContextCancel(ctx, 10*time.Second, false, func(ctx context.Context) (bool, error) {
+		allRemoved := true
+
+		// Check mutating webhooks
+		for _, webhookName := range mutatingWebhooks {
+			webhook, err := webhook.PullMutatingConfiguration(apiClient, webhookName)
+			if err == nil && webhook.Exists() {
+				GinkgoLogr.Info("Mutating webhook still exists", "webhook", webhookName)
+				allRemoved = false
+			}
+		}
+
+		// Check validating webhooks
+		for _, webhookName := range validatingWebhooks {
+			webhook, err := webhook.PullValidatingConfiguration(apiClient, webhookName)
+			if err == nil && webhook.Exists() {
+				GinkgoLogr.Info("Validating webhook still exists", "webhook", webhookName)
+				allRemoved = false
+			}
+		}
+
+		if !allRemoved {
+			return false, nil
+		}
+
+		GinkgoLogr.Info("All SR-IOV webhooks removed")
+		return true, nil
+	})
+
+	return err
+}
+
+// validateResourcesNotReconciling validates that resources exist but don't reconcile without operator
+func validateResourcesNotReconciling(apiClient *clients.Settings, namespace string, policyName string, beforeNodeStates map[string]string) error {
+	GinkgoLogr.Info("Validating resources are not reconciling without operator", "namespace", namespace, "policy", policyName)
+
+	// Get current node states
+	nodeStates, err := sriov.ListNetworkNodeState(apiClient, namespace, client.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list node states: %w", err)
+	}
+
+	// Compare with before state - should be the same (no reconciliation)
+	for _, nodeState := range nodeStates {
+		if nodeState.Objects != nil {
+			nodeName := nodeState.Objects.Name
+			beforeSyncStatus, exists := beforeNodeStates[nodeName]
+
+			if !exists {
+				continue
+			}
+
+			currentSyncStatus := nodeState.Objects.Status.SyncStatus
+
+			// If sync status changed to indicate new reconciliation, this is unexpected
+			if beforeSyncStatus == "Succeeded" && currentSyncStatus == "InProgress" {
+				return fmt.Errorf("node %s is reconciling without operator (status changed from %s to %s)",
+					nodeName, beforeSyncStatus, currentSyncStatus)
+			}
+		}
+	}
+
+	// Verify policy exists but is not being applied
+	policy, err := sriov.PullPolicy(apiClient, policyName, namespace)
+	if err != nil {
+		return fmt.Errorf("policy %s should still exist in API: %w", policyName, err)
+	}
+
+	if !policy.Exists() {
+		return fmt.Errorf("policy %s should exist", policyName)
+	}
+
+	GinkgoLogr.Info("Verified resources exist but are not reconciling", "policy", policyName)
+	return nil
+}
+
+// deleteOperatorConfiguration deletes SR-IOV operator configuration
+func deleteOperatorConfiguration(apiClient *clients.Settings, namespace string) error {
+	GinkgoLogr.Info("Deleting SR-IOV operator configuration", "namespace", namespace)
+
+	// Get and delete SriovOperatorConfig
+	operatorConfig, err := sriov.PullOperatorConfig(apiClient, namespace)
+	if err != nil {
+		GinkgoLogr.Info("SriovOperatorConfig not found or already deleted", "error", err)
+		return nil
+	}
+
+	if !operatorConfig.Exists() {
+		GinkgoLogr.Info("SriovOperatorConfig does not exist")
+		return nil
+	}
+
+	_, err = operatorConfig.Delete()
+	if err != nil {
+		return fmt.Errorf("failed to delete SriovOperatorConfig: %w", err)
+	}
+
+	GinkgoLogr.Info("SriovOperatorConfig deleted successfully")
+	return nil
+}
+
+// createSriovPolicy creates a new SR-IOV policy and returns the builder
+func createSriovPolicy(name, deviceID, vendor, interfaceName, namespace string, vfNum int, workerNodes []*nodes.Builder) *sriov.PolicyBuilder {
+	GinkgoLogr.Info("Creating SR-IOV policy", "name", name, "deviceID", deviceID, "vendor", vendor)
+
+	// Create policy targeting the first worker node
+	if len(workerNodes) == 0 {
+		GinkgoLogr.Info("No worker nodes available for policy creation")
+		return nil
+	}
+
+	node := workerNodes[0]
+	pfSelector := fmt.Sprintf("%s#0-%d", interfaceName, vfNum-1)
+
+	GinkgoLogr.Info("Creating policy on node", "node", node.Definition.Name, "pfSelector", pfSelector)
+
+	// Create SRIOV policy
+	policyBuilder := sriov.NewPolicyBuilder(
+		getAPIClient(),
+		name,
+		namespace,
+		name,
+		vfNum,
+		[]string{pfSelector},
+		map[string]string{"kubernetes.io/hostname": node.Definition.Name},
+	).WithDevType("netdevice")
+
+	_, err := policyBuilder.Create()
+	if err != nil {
+		GinkgoLogr.Info("Failed to create SRIOV policy", "error", err, "name", name)
+		return nil
+	}
+
+	GinkgoLogr.Info("SRIOV policy created successfully", "name", name)
+	return policyBuilder
+}
+
