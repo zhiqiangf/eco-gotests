@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -2890,5 +2891,114 @@ func createDPDKTestPod(name, namespace, networkName string) *pod.Builder {
 
 	logOcCommand("get", "pod", name, namespace, "-o", "yaml")
 	return createdPod
+}
+
+// runCommand executes a shell command and returns an error if it fails
+func runCommand(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	
+	// Capture output for logging
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	
+	err := cmd.Run()
+	
+	// Log the output for diagnostics
+	if outBuf.Len() > 0 {
+		GinkgoLogr.Info("Command output", "command", name, "output", outBuf.String())
+	}
+	if errBuf.Len() > 0 {
+		GinkgoLogr.Info("Command error output", "command", name, "stderr", errBuf.String())
+	}
+	
+	if err != nil {
+		GinkgoLogr.Info("Command execution failed", "command", name, "error", err)
+		return fmt.Errorf("command failed: %s %v: %w", name, args, err)
+	}
+	
+	return nil
+}
+
+// manuallyRestoreOperator restores the SR-IOV operator if subscription is missing
+func manuallyRestoreOperator(apiClient *clients.Settings, sriovOpNs string) error {
+	GinkgoLogr.Info("Attempting manual SR-IOV operator restoration")
+
+	// First, recreate the subscription if it doesn't exist
+	GinkgoLogr.Info("Checking if subscription exists", "namespace", sriovOpNs, "subscription", "sriov-network-operator")
+	sub, err := getOperatorSubscription(apiClient, sriovOpNs)
+	if err != nil {
+		GinkgoLogr.Info("Subscription not found, recreating", "error", err)
+		
+		// Create the subscription
+		cmd := fmt.Sprintf(
+			`oc apply -f - <<'EOF'
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: sriov-network-operator
+  namespace: %s
+spec:
+  channel: stable
+  name: sriov-network-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+EOF`, sriovOpNs)
+		
+		err := runCommand("bash", "-c", cmd)
+		if err != nil {
+			GinkgoLogr.Info("Failed to recreate subscription", "error", err)
+			return fmt.Errorf("failed to recreate subscription: %w", err)
+		}
+		GinkgoLogr.Info("Subscription recreated successfully")
+	} else {
+		GinkgoLogr.Info("Subscription found, using existing", "subscription", sub.Definition.Name)
+	}
+
+	// Ensure SriovOperatorConfig exists
+	GinkgoLogr.Info("Ensuring SriovOperatorConfig exists")
+	cmd := fmt.Sprintf(
+		`oc apply -f - <<'EOF'
+apiVersion: sriovnetwork.openshift.io/v1
+kind: SriovOperatorConfig
+metadata:
+  name: default
+  namespace: %s
+spec:
+  enableInjector: true
+  enableOperatorWebhook: true
+  logLevel: 0
+  featureGates: {}
+EOF`, sriovOpNs)
+	
+	err = runCommand("bash", "-c", cmd)
+	if err != nil {
+		GinkgoLogr.Info("Failed to ensure SriovOperatorConfig", "error", err)
+		return fmt.Errorf("failed to ensure SriovOperatorConfig: %w", err)
+	}
+	GinkgoLogr.Info("SriovOperatorConfig ensured")
+
+	// Wait for operator pods to appear
+	GinkgoLogr.Info("Waiting for operator pods to appear after restoration")
+	for i := 0; i < 40; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		podList := &corev1.PodList{}
+		err := apiClient.Client.List(ctx, podList, &client.ListOptions{Namespace: sriovOpNs})
+		cancel()
+		
+		if err == nil && len(podList.Items) > 0 {
+			GinkgoLogr.Info("Operator pods found after restoration", "count", len(podList.Items), "iteration", i)
+			// Give pods a moment to stabilize
+			time.Sleep(5 * time.Second)
+			return nil
+		}
+		
+		if i%5 == 0 {
+			GinkgoLogr.Info("Still waiting for operator pods", "attempt", i, "of", 40)
+		}
+		time.Sleep(3 * time.Second)
+	}
+
+	return fmt.Errorf("operator pods not found after manual restoration attempt (waited 120 seconds)")
 }
 

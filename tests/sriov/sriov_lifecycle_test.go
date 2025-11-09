@@ -475,27 +475,3 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 	})
 })
 
-// Helper function to manually restore the SR-IOV operator if subscription is not available
-func manuallyRestoreOperator(apiClient *clients.Settings, sriovOpNs string) error {
-	GinkgoLogr.Info("Attempting manual SR-IOV operator restoration by waiting for catalog reconciliation")
-
-	// If subscription was deleted, wait for the OLM catalog to automatically reconcile it
-	// This is handled by the OLM Operator Lifecycle Manager which monitors the catalog source
-	GinkgoLogr.Info("Waiting for OLM to reconcile subscription from catalog source", "namespace", sriovOpNs)
-	time.Sleep(10 * time.Second)
-
-	// Retry waiting for operator pods to appear
-	for i := 0; i < 30; i++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		podList := &corev1.PodList{}
-		err := apiClient.Client.List(ctx, podList, &client.ListOptions{Namespace: sriovOpNs})
-		cancel()
-		if err == nil && len(podList.Items) > 0 {
-			GinkgoLogr.Info("Operator pods found after OLM reconciliation", "count", len(podList.Items))
-			return nil
-		}
-		time.Sleep(3 * time.Second)
-	}
-
-	return fmt.Errorf("operator pods not found after manual restoration attempt")
-}
