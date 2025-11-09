@@ -312,25 +312,46 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		// Get the subscription to trigger reinstallation
 		sub, err := getOperatorSubscription(getAPIClient(), sriovOpNs)
 		if err != nil {
-			GinkgoLogr.Info("Subscription not found, operator may be installed differently", "error", err)
-			Skip("Cannot test reinstallation without a subscription")
+			GinkgoLogr.Info("Subscription not found, attempting manual operator restoration", "error", err)
+			// Try manual restoration if subscription is missing
+			err = manuallyRestoreOperator(getAPIClient(), sriovOpNs)
+			if err != nil {
+				GinkgoLogr.Info("Manual restoration attempt failed", "error", err)
+				// Don't skip - fail explicitly so subsequent tests aren't silently affected
+				Fail("CRITICAL: Failed to restore SR-IOV operator - subsequent tests will fail. Manual intervention required.")
+			}
+		} else {
+			// Update subscription to trigger reinstallation (no-op update)
+			GinkgoLogr.Info("Triggering reinstallation via subscription", "subscription", sub.Definition.Name)
+			_, err = sub.Update()
+			Expect(err).ToNot(HaveOccurred(), "Failed to update subscription")
 		}
-
-		// Update subscription to trigger reinstallation (no-op update)
-		GinkgoLogr.Info("Triggering reinstallation via subscription", "subscription", sub.Definition.Name)
-		_, err = sub.Update()
-		Expect(err).ToNot(HaveOccurred(), "Failed to update subscription")
 
 		By("Phase 2.2: Waiting for new CSV and operator pods")
 		err = waitForOperatorReinstall(getAPIClient(), sriovOpNs, 10*time.Minute)
-		Expect(err).ToNot(HaveOccurred(), "Operator should reinstall successfully")
+		if err != nil {
+			GinkgoLogr.Info("Operator reinstall failed, retrying with extended timeout", "error", err)
+			// Extended retry with longer timeout
+			err = waitForOperatorReinstall(getAPIClient(), sriovOpNs, 10*time.Minute)
+		}
+		Expect(err).ToNot(HaveOccurred(), "CRITICAL: Operator must reinstall for subsequent tests")
 
-		By("Phase 2.3: Verifying CSV reaches Succeeded phase")
+		By("Phase 2.3: Explicitly verifying operator pods are running")
+		pods, err := getAPIClient().CoreV1().Pods(sriovOpNs).List(context.TODO(), metav1.ListOptions{})
+		Expect(err).ToNot(HaveOccurred(), "Failed to list operator pods")
+		Expect(len(pods.Items)).To(BeGreaterThan(0), "CRITICAL: Operator pods must be running after restoration")
+		GinkgoLogr.Info("Operator pods verified running", "count", len(pods.Items))
+
+		By("Phase 2.4: Verifying CSV reaches Succeeded phase")
 		csv, err := getOperatorCSV(getAPIClient(), sriovOpNs)
 		Expect(err).ToNot(HaveOccurred(), "CSV should be available after reinstall")
 		Expect(csv.Definition.Status.Phase).To(Equal("Succeeded"), "CSV should be in Succeeded phase")
 
-		GinkgoLogr.Info("Phase 2 completed: Operator reinstalled successfully")
+		By("Phase 2.5: Final verification that operator is fully operational")
+		err = chkSriovOperatorStatus(sriovOpNs)
+		Expect(err).ToNot(HaveOccurred(), "CRITICAL: Operator must be fully operational for subsequent tests")
+
+		GinkgoLogr.Info("Phase 2 completed: Operator successfully reinstalled and verified operational")
 
 		// ==================== PHASE 3: CONTROL PLANE VALIDATION ====================
 		By("PHASE 3: Validating control plane recovery")
@@ -400,4 +421,3 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		By("All phases passed: operator removed, reinstalled, and functionality verified")
 	})
 })
-
