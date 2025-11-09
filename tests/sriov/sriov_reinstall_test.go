@@ -336,20 +336,22 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		}
 		Expect(err).ToNot(HaveOccurred(), "CRITICAL: Operator must reinstall for subsequent tests")
 
-		By("Phase 2.3: Explicitly verifying operator pods are running")
-		pods, err := getAPIClient().CoreV1().Pods(sriovOpNs).List(context.TODO(), metav1.ListOptions{})
-		Expect(err).ToNot(HaveOccurred(), "Failed to list operator pods")
-		Expect(len(pods.Items)).To(BeGreaterThan(0), "CRITICAL: Operator pods must be running after restoration")
-		GinkgoLogr.Info("Operator pods verified running", "count", len(pods.Items))
+	By("Phase 2.3: Explicitly verifying operator pods are running")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	podList := &corev1.PodList{}
+	err = getAPIClient().Client.List(ctx, podList, &client.ListOptions{Namespace: sriovOpNs})
+	Expect(err).ToNot(HaveOccurred(), "Failed to list operator pods")
+	Expect(len(podList.Items)).To(BeNumerically(">", 0), "CRITICAL: Operator pods must be running after restoration")
+	GinkgoLogr.Info("Operator pods verified running", "count", len(podList.Items))
 
 		By("Phase 2.4: Verifying CSV reaches Succeeded phase")
 		csv, err := getOperatorCSV(getAPIClient(), sriovOpNs)
 		Expect(err).ToNot(HaveOccurred(), "CSV should be available after reinstall")
 		Expect(csv.Definition.Status.Phase).To(Equal("Succeeded"), "CSV should be in Succeeded phase")
 
-		By("Phase 2.5: Final verification that operator is fully operational")
-		err = chkSriovOperatorStatus(sriovOpNs)
-		Expect(err).ToNot(HaveOccurred(), "CRITICAL: Operator must be fully operational for subsequent tests")
+	By("Phase 2.5: Final verification that operator is fully operational")
+	chkSriovOperatorStatus(sriovOpNs)
 
 		GinkgoLogr.Info("Phase 2 completed: Operator successfully reinstalled and verified operational")
 

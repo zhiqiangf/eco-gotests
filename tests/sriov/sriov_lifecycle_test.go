@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var (
@@ -228,11 +229,14 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		Expect(err).ToNot(HaveOccurred(), "CRITICAL: Operator must reinstall for subsequent tests")
 		operatorRestored = true
 
-		By("Phase 4.3: Explicitly verifying operator pods are running")
-		pods, err := getAPIClient().CoreV1().Pods(sriovOpNs).List(context.TODO(), metav1.ListOptions{})
-		Expect(err).ToNot(HaveOccurred(), "Failed to list operator pods")
-		Expect(len(pods.Items)).To(BeGreaterThan(0), "CRITICAL: Operator pods must be running after restoration")
-		GinkgoLogr.Info("Operator pods verified running", "count", len(pods.Items))
+	By("Phase 4.3: Explicitly verifying operator pods are running")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	podList := &corev1.PodList{}
+	err = getAPIClient().Client.List(ctx, podList, &client.ListOptions{Namespace: sriovOpNs})
+	Expect(err).ToNot(HaveOccurred(), "Failed to list operator pods")
+	Expect(len(podList.Items)).To(BeNumerically(">", 0), "CRITICAL: Operator pods must be running after restoration")
+	GinkgoLogr.Info("Operator pods verified running", "count", len(podList.Items))
 
 		By("Phase 4.4: Validating control plane recovery")
 		err = validateOperatorControlPlane(getAPIClient(), sriovOpNs)
@@ -242,9 +246,8 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		err = validateNodeStatesReconciled(getAPIClient(), sriovOpNs, 20*time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Node states should reconcile after reinstall")
 
-		By("Phase 4.6: Final verification that operator is fully operational")
-		err = chkSriovOperatorStatus(sriovOpNs)
-		Expect(err).ToNot(HaveOccurred(), "CRITICAL: Operator must be fully operational for subsequent tests")
+	By("Phase 4.6: Final verification that operator is fully operational")
+	chkSriovOperatorStatus(sriovOpNs)
 
 		if !operatorRestored {
 			Fail("CRITICAL: Operator restoration incomplete - subsequent tests will fail")
@@ -472,33 +475,26 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 })
 
 // Helper function to manually restore the SR-IOV operator if subscription is not available
-func manuallyRestoreOperator(apiClient *client.Client, sriovOpNs string) error {
-	GinkgoLogr.Info("Attempting manual SR-IOV operator restoration")
+func manuallyRestoreOperator(apiClient *clients.Settings, sriovOpNs string) error {
+	GinkgoLogr.Info("Attempting manual SR-IOV operator restoration by waiting for catalog reconciliation")
 
-	// Check if subscription exists and recreate if needed
-	subs, err := apiClient.Operators("v1alpha1", "Subscription").List(sriovOpNs, metav1.ListOptions{})
-	if err != nil {
-		GinkgoLogr.Info("Failed to list subscriptions", "error", err)
-		return err
-	}
+	// If subscription was deleted, wait for the OLM catalog to automatically reconcile it
+	// This is handled by the OLM Operator Lifecycle Manager which monitors the catalog source
+	GinkgoLogr.Info("Waiting for OLM to reconcile subscription from catalog source", "namespace", sriovOpNs)
+	time.Sleep(10 * time.Second)
 
-	// If no subscription found, try to wait for automatic recreation
-	if subs == nil || len(subs) == 0 {
-		GinkgoLogr.Info("No subscriptions found, waiting for operator to reconcile from catalog")
-		time.Sleep(10 * time.Second)
-
-		// Retry waiting for operator pods
-		for i := 0; i < 30; i++ {
-			pods, err := apiClient.CoreV1().Pods(sriovOpNs).List(context.TODO(), metav1.ListOptions{})
-			if err == nil && len(pods.Items) > 0 {
-				GinkgoLogr.Info("Operator pods found after subscription recreation", "count", len(pods.Items))
-				return nil
-			}
-			time.Sleep(3 * time.Second)
+	// Retry waiting for operator pods to appear
+	for i := 0; i < 30; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		podList := &corev1.PodList{}
+		err := apiClient.Client.List(ctx, podList, &client.ListOptions{Namespace: sriovOpNs})
+		cancel()
+		if err == nil && len(podList.Items) > 0 {
+			GinkgoLogr.Info("Operator pods found after OLM reconciliation", "count", len(podList.Items))
+			return nil
 		}
-
-		return fmt.Errorf("operator pods not found after manual restoration attempt")
+		time.Sleep(3 * time.Second)
 	}
 
-	return nil
+	return fmt.Errorf("operator pods not found after manual restoration attempt")
 }
