@@ -1,7 +1,6 @@
 package sriov
 
 import (
-	"fmt"
 	"path/filepath"
 	"time"
 
@@ -25,7 +24,7 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 		By("Setup: Initializing test environment for bonding tests")
 		workerNodes, _ = nodes.List(
 			getAPIClient(),
-			&metav1.ListOptions{
+			metav1.ListOptions{
 				LabelSelector: NetConfig.WorkerLabel,
 			},
 		)
@@ -513,4 +512,3 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 		By("✅ BOND MODE OPERATOR LEVEL TEST COMPLETED: Active-backup and 802.3ad modes validated")
 	})
 })
-

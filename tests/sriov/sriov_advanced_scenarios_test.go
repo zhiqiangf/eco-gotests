@@ -26,7 +26,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		By("Setup: Initializing test environment for advanced scenarios")
 		workerNodes, _ = nodes.List(
 			getAPIClient(),
-			&metav1.ListOptions{
+			metav1.ListOptions{
 				LabelSelector: NetConfig.WorkerLabel,
 			},
 		)
@@ -109,7 +109,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 			testDeviceConfig.Name,
 			sriovOpNs,
 			testNamespace,
-			100, // VLAN ID
+			100,  // VLAN ID
 			9000, // MTU
 			"whereabouts",
 			"192.168.50.0/24",
@@ -122,7 +122,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 			testDeviceConfig.Name,
 			sriovOpNs,
 			testNamespace,
-			200, // VLAN ID
+			200,  // VLAN ID
 			1500, // MTU
 			"whereabouts",
 			"192.168.51.0/24",
@@ -245,7 +245,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		By("PHASE 4: Testing resilience - pod recovery and resource allocation")
 
 		By("Phase 4.1: Deleting user plane pod to test recovery")
-		err = userPlanePod.DeleteAndWait(60 * time.Second)
+		_, err = userPlanePod.DeleteAndWait(60 * time.Second)
 		Expect(err).ToNot(HaveOccurred(), "User plane pod should delete successfully")
 
 		By("Phase 4.2: Verifying surviving pods maintain connectivity")
@@ -578,7 +578,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		}
 
 		By("Phase 4.4: Scaling down - deleting 1 pod and verifying resources released")
-		err = scalePods[0].DeleteAndWait(60 * time.Second)
+		_, err = scalePods[0].DeleteAndWait(60 * time.Second)
 		Expect(err).ToNot(HaveOccurred(), "First scale pod should delete successfully")
 
 		By("Phase 4.5: Recreating pod and verifying resource re-allocation")
@@ -601,4 +601,3 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		By("✅ MULTI-FEATURE INTEGRATION TEST COMPLETED")
 	})
 })
-
