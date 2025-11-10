@@ -245,6 +245,32 @@ log_step "Deleting operator pod to trigger restart: $OPERATOR_POD"
 oc delete pod "$OPERATOR_POD" -n "$SRIOV_OPERATOR_NS" --wait=false
 log_success "Pod deletion initiated"
 
+# Monitor SriovNetwork and NAD status during operator pod deletion
+log_step "Monitoring SriovNetwork and NetworkAttachmentDefinition status during pod deletion..."
+{
+    echo "=== Monitoring SriovNetwork and NAD After Operator Pod Deletion ==="
+    echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo ""
+    
+    for i in {1..20}; do
+        echo "--- Check #$i (T+${i}s) ---"
+        
+        echo "SriovNetwork Status (Phase 1):"
+        oc get sriovnetwork bug-reproduce-net-phase1 -n "$SRIOV_OPERATOR_NS" -o json | jq '{name: .metadata.name, namespace: .metadata.namespace, uid: .metadata.uid, status: .status, phase: .metadata.deletionTimestamp}' 2>/dev/null || echo "  [Not found or error]"
+        
+        echo ""
+        echo "NetworkAttachmentDefinition Status (Phase 1 - if exists):"
+        oc get net-attach-def bug-reproduce-net-phase1 -n "$TEST_NS" -o json 2>/dev/null | jq '{name: .metadata.name, namespace: .metadata.namespace, uid: .metadata.uid, deletionTimestamp: .metadata.deletionTimestamp}' || echo "  [Not found]"
+        
+        echo ""
+        echo "Operator Pod Status:"
+        oc get pod "$OPERATOR_POD" -n "$SRIOV_OPERATOR_NS" 2>/dev/null | tail -1 || echo "  [Pod deleted]"
+        
+        echo ""
+        sleep 1
+    done
+} | tee "$LOG_DIR/pod-deletion-monitoring.txt"
+
 log_step "Waiting for operator pod to restart (max 60s)"
 sleep 10
 for i in {1..30}; do
