@@ -89,6 +89,19 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 			"source", capturedSubscription.Definition.Spec.Source)
 	}
 
+	// IMPORTANT: For private registry environments, capture IDMS to ensure operator images can be pulled
+	// without this, operator pods would fail to start with ImagePullBackOff after restoration
+	By("Capturing ImageDigestMirrorSet configuration for private registry support")
+	capturedIDMS, err := captureImageDigestMirrorSets(getAPIClient())
+	if err != nil {
+		GinkgoLogr.Info("No ImageDigestMirrorSet found, test likely uses public registries", "error", err)
+	} else {
+		GinkgoLogr.Info("ImageDigestMirrorSet configuration captured successfully", "count", len(capturedIDMS))
+		for i, idms := range capturedIDMS {
+			GinkgoLogr.Info("IDMS captured", "index", i, "name", idms.Name, "mirrors_count", len(idms.Spec.ImageDigestMirrors))
+		}
+	}
+
 	// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
 	testNamespace = "e2e-lifecycle-cleanup-" + testDeviceConfig.Name + "-" + timestamp
@@ -213,6 +226,18 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 
 	// ==================== PHASE 4: OPERATOR REINSTALLATION ====================
 	By("PHASE 4: Reinstalling SR-IOV operator")
+
+	// CRITICAL: Restore IDMS BEFORE operator reinstallation
+	// For private registry environments, IDMS must be in place for operator images to be pulled correctly
+	By("Phase 4.0: Restoring ImageDigestMirrorSet configuration for private registry support")
+	if capturedIDMS != nil && len(capturedIDMS) > 0 {
+		GinkgoLogr.Info("Restoring ImageDigestMirrorSet configuration", "count", len(capturedIDMS))
+		err = restoreImageDigestMirrorSets(getAPIClient(), capturedIDMS)
+		Expect(err).ToNot(HaveOccurred(), "Failed to restore ImageDigestMirrorSet configuration")
+		GinkgoLogr.Info("ImageDigestMirrorSet configuration restored successfully")
+	} else {
+		GinkgoLogr.Info("No IDMS to restore, test uses public registries")
+	}
 
 	By("Phase 4.1: Triggering operator reinstallation using captured Subscription configuration")
 	operatorRestored := false

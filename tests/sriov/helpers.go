@@ -13,6 +13,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	configv1 "github.com/openshift/api/config/v1"
 	machineconfigv1 "github.com/openshift/api/machineconfiguration/v1"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/clients"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/daemonset"
@@ -1815,6 +1816,94 @@ func getOperatorSubscription(apiClient *clients.Settings, namespace string) (*ol
 	GinkgoLogr.Info("Attempting to find subscription by listing all subscriptions in namespace", "namespace", namespace)
 	// Note: We'll skip listing if we can't find by name, as subscription might be managed differently
 	return nil, fmt.Errorf("no SR-IOV subscription found in namespace %s", namespace)
+}
+
+// captureImageDigestMirrorSets captures all IDMS configurations in the cluster
+// This is critical for private registry environments to ensure operator images can be pulled after restoration
+func captureImageDigestMirrorSets(apiClient *clients.Settings) ([]*configv1.ImageDigestMirrorSet, error) {
+	GinkgoLogr.Info("Capturing ImageDigestMirrorSet configurations from cluster")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// List all ImageDigestMirrorSets in the cluster (cluster-scoped resource)
+	idmsList := &configv1.ImageDigestMirrorSetList{}
+	err := apiClient.Client.List(ctx, idmsList)
+	if err != nil {
+		GinkgoLogr.Info("Failed to list ImageDigestMirrorSets", "error", err)
+		return nil, fmt.Errorf("failed to list ImageDigestMirrorSets: %w", err)
+	}
+
+	if len(idmsList.Items) == 0 {
+		GinkgoLogr.Info("No ImageDigestMirrorSets found in cluster")
+		return nil, fmt.Errorf("no ImageDigestMirrorSets configured in cluster")
+	}
+
+	// Create a slice of pointers to the captured IDMS objects
+	capturedIDMS := make([]*configv1.ImageDigestMirrorSet, 0)
+	for i := range idmsList.Items {
+		// Deep copy each IDMS to preserve its state
+		idmsCopy := idmsList.Items[i].DeepCopy()
+		capturedIDMS = append(capturedIDMS, idmsCopy)
+		GinkgoLogr.Info("IDMS captured", "name", idmsCopy.Name, "mirrors", len(idmsCopy.Spec.ImageDigestMirrors))
+	}
+
+	GinkgoLogr.Info("ImageDigestMirrorSet configurations captured successfully", "count", len(capturedIDMS))
+	return capturedIDMS, nil
+}
+
+// restoreImageDigestMirrorSets restores IDMS configurations to the cluster
+// This must be done BEFORE operator pods are scheduled to ensure they can pull images from correct registries
+func restoreImageDigestMirrorSets(apiClient *clients.Settings, capturedIDMS []*configv1.ImageDigestMirrorSet) error {
+	GinkgoLogr.Info("Restoring ImageDigestMirrorSet configurations to cluster", "count", len(capturedIDMS))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for _, idms := range capturedIDMS {
+		// Create a copy for restoration to avoid modifying the captured object
+		idmsToRestore := idms.DeepCopy()
+		// Clear metadata fields that should be regenerated
+		idmsToRestore.UID = ""
+		idmsToRestore.ResourceVersion = ""
+		idmsToRestore.Generation = 0
+		idmsToRestore.ManagedFields = nil
+
+		GinkgoLogr.Info("Restoring IDMS", "name", idmsToRestore.Name)
+
+		// Try to create the IDMS
+		err := apiClient.Client.Create(ctx, idmsToRestore)
+		if err != nil {
+			// If it already exists, update it instead
+			if strings.Contains(err.Error(), "already exists") {
+				GinkgoLogr.Info("IDMS already exists, updating it", "name", idmsToRestore.Name)
+				// Get the existing IDMS to preserve its metadata
+				existingIDMS := &configv1.ImageDigestMirrorSet{}
+				err := apiClient.Client.Get(ctx, client.ObjectKey{Name: idmsToRestore.Name}, existingIDMS)
+				if err != nil {
+					return fmt.Errorf("failed to get existing IDMS %s for update: %w", idmsToRestore.Name, err)
+				}
+
+				// Update spec only
+				existingIDMS.Spec = idmsToRestore.Spec
+				err = apiClient.Client.Update(ctx, existingIDMS)
+				if err != nil {
+					return fmt.Errorf("failed to update IDMS %s: %w", idmsToRestore.Name, err)
+				}
+				GinkgoLogr.Info("IDMS updated successfully", "name", idmsToRestore.Name)
+			} else {
+				return fmt.Errorf("failed to restore IDMS %s: %w", idmsToRestore.Name, err)
+			}
+		} else {
+			GinkgoLogr.Info("IDMS restored successfully", "name", idmsToRestore.Name)
+		}
+	}
+
+	// Give the cluster a moment to process the IDMS changes
+	time.Sleep(5 * time.Second)
+
+	GinkgoLogr.Info("All ImageDigestMirrorSet configurations restored successfully")
+	return nil
 }
 
 // deleteOperatorCSV deletes the CSV for SR-IOV operator
