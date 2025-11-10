@@ -304,11 +304,11 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 			Skip("No SR-IOV devices available for multi-feature integration testing")
 		}
 
-		// ==================== PHASE 1: SR-IOV with DPDK ====================
-		By("PHASE 1: Testing SR-IOV with DPDK integration")
+	// ==================== PHASE 1: SR-IOV with DPDK ====================
+	By("PHASE 1: Testing SR-IOV with DPDK integration")
 
-  // Use timestamp suffix to avoid namespace collision from previous test runs
-  timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	// Use timestamp suffix to avoid namespace collision from previous test runs
+	timestamp = fmt.Sprintf("%d", time.Now().Unix())
 		testNamespaceDPDK := "e2e-dpdk-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
 		dpdkNetworkName := "dpdk-net-" + testDeviceConfig.Name
 		dpdkPolicyName := "dpdk-policy-" + testDeviceConfig.Name
@@ -366,11 +366,11 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		dpdkPod.DeleteAndWait(60 * time.Second)
 		By("PHASE 1 completed: DPDK integration validated")
 
-		// ==================== PHASE 2: Multiple SR-IOV Networks per Pod ====================
-		By("PHASE 2: Testing multiple SR-IOV networks per pod")
+	// ==================== PHASE 2: Multiple SR-IOV Networks per Pod ====================
+	By("PHASE 2: Testing multiple SR-IOV networks per pod")
 
-  // Use timestamp suffix to avoid namespace collision from previous test runs
-  timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	// Use timestamp suffix to avoid namespace collision from previous test runs
+	timestamp = fmt.Sprintf("%d", time.Now().Unix())
 		testNamespaceMulti := "e2e-multi-net-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
 		netA := "multi-net-a-" + testDeviceConfig.Name
 		netB := "multi-net-b-" + testDeviceConfig.Name
@@ -463,11 +463,11 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		multiNetPod.DeleteAndWait(60 * time.Second)
 		By("PHASE 2 completed: Multiple SR-IOV networks per pod validated")
 
-		// ==================== PHASE 3: Mixed Networking (SR-IOV + OVN-K) ====================
-		By("PHASE 3: Testing mixed networking with SR-IOV secondary and OVN-K primary")
+	// ==================== PHASE 3: Mixed Networking (SR-IOV + OVN-K) ====================
+	By("PHASE 3: Testing mixed networking with SR-IOV secondary and OVN-K primary")
 
-  // Use timestamp suffix to avoid namespace collision from previous test runs
-  timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	// Use timestamp suffix to avoid namespace collision from previous test runs
+	timestamp = fmt.Sprintf("%d", time.Now().Unix())
 		testNamespaceMixed := "e2e-mixed-net-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
 		mixedNetworkName := "mixed-sriov-" + testDeviceConfig.Name
 
@@ -530,11 +530,11 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		mixedPod2.DeleteAndWait(60 * time.Second)
 		By("PHASE 3 completed: Mixed networking validated")
 
-		// ==================== PHASE 4: Resource Management and Scaling ====================
-		By("PHASE 4: Testing resource management and pod scaling with SR-IOV")
+	// ==================== PHASE 4: Resource Management and Scaling ====================
+	By("PHASE 4: Testing resource management and pod scaling with SR-IOV")
 
-  // Use timestamp suffix to avoid namespace collision from previous test runs
-  timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	// Use timestamp suffix to avoid namespace collision from previous test runs
+	timestamp = fmt.Sprintf("%d", time.Now().Unix())
 		testNamespaceScale := "e2e-scale-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
 		scaleNetworkName := "scale-net-" + testDeviceConfig.Name
 

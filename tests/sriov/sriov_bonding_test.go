@@ -1,7 +1,7 @@
 package sriov
 
 import (
-t"fmt"
+	"fmt"
 	"path/filepath"
 	"time"
 

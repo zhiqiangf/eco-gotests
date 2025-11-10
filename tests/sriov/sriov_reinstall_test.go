@@ -191,7 +191,7 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		GinkgoLogr.Info("Operator Subscription captured successfully", 
 			"name", capturedSubscription.Definition.Name,
 			"channel", capturedSubscription.Definition.Spec.Channel,
-			"source", capturedSubscription.Definition.Spec.Source)
+			"source", capturedSubscription.Definition.Spec.CatalogSource)
 	}
 
 	// IMPORTANT: For private registry environments, capture IDMS to ensure operator images can be pulled
@@ -357,7 +357,7 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		GinkgoLogr.Info("Restoring operator with captured Subscription configuration", 
 			"name", capturedSubscription.Definition.Name,
 			"channel", capturedSubscription.Definition.Spec.Channel,
-			"source", capturedSubscription.Definition.Spec.Source)
+			"source", capturedSubscription.Definition.Spec.CatalogSource)
 		// Update subscription to trigger reinstallation (no-op update)
 		_, err = capturedSubscription.Update()
 		Expect(err).ToNot(HaveOccurred(), "Failed to update captured subscription for reinstallation")
