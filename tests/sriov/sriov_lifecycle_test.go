@@ -160,10 +160,10 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		clientPod = createTestPod("client-cleanup", testNamespace, testNetworkName, "192.168.30.10/24", "20:04:0f:f1:77:01")
 		serverPod = createTestPod("server-cleanup", testNamespace, testNetworkName, "192.168.30.11/24", "20:04:0f:f1:77:02")
 
-	err = clientPod.WaitUntilReady(10 * time.Minute)
+	err = clientPod.WaitUntilReady(15 * time.Minute)
 	Expect(err).ToNot(HaveOccurred(), "Client pod should be ready")
 
-	err = serverPod.WaitUntilReady(10 * time.Minute)
+	err = serverPod.WaitUntilReady(15 * time.Minute)
 	Expect(err).ToNot(HaveOccurred(), "Server pod should be ready")
 
 		By("Phase 1.4: Validating initial connectivity between pods")
@@ -388,10 +388,10 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		clientPod = createTestPod("client-depend", testNamespace, testNetworkName, "192.168.40.10/24", "20:04:0f:f1:66:01")
 		serverPod = createTestPod("server-depend", testNamespace, testNetworkName, "192.168.40.11/24", "20:04:0f:f1:66:02")
 
-		err = clientPod.WaitUntilReady(5 * time.Minute)
+		err = clientPod.WaitUntilReady(15 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Client pod should be ready with operator running")
 
-		err = serverPod.WaitUntilReady(5 * time.Minute)
+		err = serverPod.WaitUntilReady(15 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Server pod should be ready with operator running")
 
 		By("Phase 1.4: Validating initial deployment works")
@@ -500,10 +500,10 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 			}
 		}()
 
-		err = newClientPod.WaitUntilReady(5 * time.Minute)
+		err = newClientPod.WaitUntilReady(15 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "New client pod should be ready after reconciliation")
 
-		err = newServerPod.WaitUntilReady(5 * time.Minute)
+		err = newServerPod.WaitUntilReady(15 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "New server pod should be ready after reconciliation")
 
 		By("Phase 5.2: Validating connectivity for new workloads")

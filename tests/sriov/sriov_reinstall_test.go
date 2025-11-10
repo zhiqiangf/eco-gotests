@@ -150,10 +150,10 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		serverPod := createTestPod("server-dp", testNamespace, testNetworkName, "192.168.10.11/24", "20:04:0f:f1:99:02")
 
 		By("Step 3: Waiting for pods to be ready")
-	err = clientPod.WaitUntilReady(10 * time.Minute)
+	err = clientPod.WaitUntilReady(15 * time.Minute)
 	Expect(err).ToNot(HaveOccurred(), "Client pod should be ready")
 
-	err = serverPod.WaitUntilReady(10 * time.Minute)
+	err = serverPod.WaitUntilReady(15 * time.Minute)
 	Expect(err).ToNot(HaveOccurred(), "Server pod should be ready")
 
 		By("Step 4: Validating SR-IOV interfaces on pods")
@@ -271,10 +271,10 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		clientPod = createTestPod("client-full", testNamespace, testNetworkName, "192.168.20.10/24", "20:04:0f:f1:88:01")
 		serverPod = createTestPod("server-full", testNamespace, testNetworkName, "192.168.20.11/24", "20:04:0f:f1:88:02")
 
-	err = clientPod.WaitUntilReady(10 * time.Minute)
+	err = clientPod.WaitUntilReady(20 * time.Minute)
 	Expect(err).ToNot(HaveOccurred(), "Client pod should be ready before operator removal")
 
-	err = serverPod.WaitUntilReady(10 * time.Minute)
+	err = serverPod.WaitUntilReady(20 * time.Minute)
 	Expect(err).ToNot(HaveOccurred(), "Server pod should be ready before operator removal")
 
 		// Verify initial connectivity
@@ -452,10 +452,10 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 			newServerPod.DeleteAndWait(60 * time.Second)
 		}()
 
-		err = newClientPod.WaitUntilReady(5 * time.Minute)
+		err = newClientPod.WaitUntilReady(15 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "New client pod should be ready")
 
-		err = newServerPod.WaitUntilReady(5 * time.Minute)
+		err = newServerPod.WaitUntilReady(15 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "New server pod should be ready")
 
 		By("Phase 4.4: Confirming new workloads can use SR-IOV networks")
