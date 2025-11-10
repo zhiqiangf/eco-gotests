@@ -107,6 +107,30 @@ Reconcile() called
 
 **Key observation**: The operator successfully renders the NAD config but fails on the deletion check, preventing NAD creation.
 
+### Kubernetes Resource Lifecycle Monitoring
+
+A detailed monitoring analysis was performed during operator pod restart to understand the lifecycle of affected resources:
+
+**SriovNetwork Objects**:
+- ✅ **PERSIST** after operator pod deletion
+- ✅ Same UID remains constant throughout the restart
+- ✅ Status field remains null (operator doesn't update it)
+- ✅ No deletionTimestamp (not marked for deletion)
+- ✅ Successfully survive operator restart
+
+**NetworkAttachmentDefinition Objects**:
+- ❌ **NEVER CREATED** (confirmed across 20 monitoring checks, 1-second intervals)
+- ❌ Not a deletion issue - it's a creation failure
+- ❌ The bug prevents initial NAD creation from happening
+- This confirms the root cause is error handling in the reconciliation logic
+
+**Operator Pod Lifecycle**:
+- ✅ Normal Kubernetes pod lifecycle (Terminating → Removed → New pod starts)
+- ✅ No issues with pod restart behavior
+- ✅ Confirms the issue is not related to pod lifecycle management
+
+**Conclusion**: The bug is NOT about resource lifecycle or cleanup. It's purely about overly-strict error handling preventing NAD creation when the optional cleanup operation fails with "not found" (which is expected).
+
 ---
 
 ## Reproduction Steps
@@ -226,9 +250,15 @@ if errors.IsNotFound(err) {
 ## Attachments for Bug Report
 
 1. **BUGGY_CODE_ANALYSIS.md** - Detailed analysis with code flow
-2. **reproduce_upstream_bug.sh** - Reproducible test script
-3. **operator-full-logs.log** - Complete operator reconciliation trace
-4. **BUG_REPORT_SUMMARY.md** - Test run summary
+2. **reproduce_upstream_bug.sh** - Reproducible test script with lifecycle monitoring
+3. **pod-deletion-monitoring.txt** - 20-second detailed monitoring of resource lifecycle during operator restart
+4. **operator-full-logs.log** - Complete operator reconciliation trace
+5. **BUG_REPORT_SUMMARY.md** - Test run summary
+
+The **pod-deletion-monitoring.txt** file is particularly important as it provides definitive evidence that:
+- SriovNetwork objects persist and are not affected by operator lifecycle
+- NetworkAttachmentDefinition objects are never created (not a deletion issue)
+- The bug is purely about overly-strict error handling in the reconciliation logic
 
 ---
 

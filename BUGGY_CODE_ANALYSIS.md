@@ -204,6 +204,32 @@ if lnns, ok := instance.GetAnnotations()[sriovnetworkv1.LASTNETWORKNAMESPACE]; o
 2025-11-10T18:56:26.574044187Z	ERROR	controller/controller.go:288	Reconciler error
 ```
 
+### Kubernetes Resource Lifecycle Monitoring
+
+A detailed monitoring analysis was performed during operator pod restart to understand the lifecycle behavior of affected resources.
+
+**Monitoring Setup**: 20 checks every 1 second during operator pod deletion and restart
+
+**SriovNetwork Objects**:
+- ✅ **PERSIST** after operator pod deletion
+- ✅ Same UID (99da162b-d0a8-42c5-be83-da16720d9dd5) throughout all 20 checks
+- ✅ Status field remains null (operator not updating it)
+- ✅ No deletionTimestamp (not marked for deletion)
+- ✅ Survive operator restart completely
+
+**NetworkAttachmentDefinition Objects**:
+- ❌ **NEVER CREATED** - not found in any of the 20 monitoring checks
+- ❌ Confirms this is a creation failure, NOT a deletion issue
+- ❌ Proves the bug prevents initial NAD creation
+- This definitively shows the root cause is error handling in reconciliation logic
+
+**Operator Pod Lifecycle**:
+- ✅ Normal Kubernetes lifecycle (Terminating → Removed → New pod starts)
+- ✅ No issues with pod restart behavior
+- ✅ Confirms the issue is isolated to error handling, not pod lifecycle
+
+**Conclusion**: The bug is NOT about resource lifecycle or cleanup. It's purely about overly-strict error handling preventing NAD creation when the optional cleanup operation fails with "not found" (which is expected and normal).
+
 ---
 
 ## Impact Analysis
