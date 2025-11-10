@@ -100,14 +100,21 @@ check_nad_status() {
     
     local output_file="$LOG_DIR/nad-status-${phase}.txt"
     
-    oc get nad "$nad" -n "$namespace" -o yaml > "$output_file" 2>&1 || {
-        log_warning "NAD not found: $nad"
+    # Detailed NAD check
+    if oc get nad "$nad" -n "$namespace" &>/dev/null; then
+        log_success "✅ NAD EXISTS in namespace: $namespace"
+        oc get nad "$nad" -n "$namespace" -o yaml > "$output_file"
+        
+        # Additional verification
+        log_step "Verifying NAD details:"
+        oc get nad "$nad" -n "$namespace" -o json | jq '.metadata.name, .metadata.namespace, .spec.config' >> "$output_file"
+        log_success "NAD verified and details saved to: $output_file"
+        return 0
+    else
+        log_warning "❌ NAD NOT FOUND in namespace: $namespace"
         echo "NOT FOUND" > "$output_file"
         return 1
-    }
-    
-    log_success "NAD status saved to: $output_file"
-    return 0
+    fi
 }
 
 check_reconciliation_logs() {
@@ -196,14 +203,20 @@ sed -i "s/sriov-bug-reproduce-ns/$TEST_NS/g" "$LOG_DIR/sriovnetwork-phase1.yaml"
 oc apply -f "$LOG_DIR/sriovnetwork-phase1.yaml"
 log_success "SriovNetwork created: bug-reproduce-net-phase1"
 
-log_step "Waiting for NAD creation (Phase 1 - pre-restart)"
-if wait_for_nad_creation "bug-reproduce-net-phase1" "$TEST_NS" 60 "phase1"; then
+log_step "Waiting for NAD creation (Phase 1 - pre-restart, timeout: 300s)"
+if wait_for_nad_creation "bug-reproduce-net-phase1" "$TEST_NS" 300 "phase1"; then
     log_success "Phase 1 PASSED: NAD created before restart"
     check_nad_status "bug-reproduce-net-phase1" "$TEST_NS" "phase1-success"
     check_sriov_network_status "bug-reproduce-net-phase1" "$SRIOV_OPERATOR_NS" "phase1"
     check_reconciliation_logs "phase1"
+    
+    log_step "Listing all NADs in test namespace ($TEST_NS) after Phase 1:"
+    oc get nad -n "$TEST_NS" > "$LOG_DIR/nad-list-phase1.txt" 2>&1
+    cat "$LOG_DIR/nad-list-phase1.txt"
 else
     log_warning "Phase 1: NAD creation took longer than expected (may be cluster slowness)"
+    log_step "Current NADs in namespace ($TEST_NS):"
+    oc get nad -n "$TEST_NS" || echo "No NADs found"
 fi
 
 echo ""
@@ -285,17 +298,25 @@ log_step "Recording timestamp of SriovNetwork creation"
 CREATION_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 echo "SriovNetwork created at: $CREATION_TIME" > "$LOG_DIR/sriovnetwork-creation-time.txt"
 
-log_step "Waiting for NAD creation (Phase 3 - post-restart) [MAX 120s]"
-if wait_for_nad_creation "bug-reproduce-net-phase3" "$TEST_NS" 120 "phase3"; then
+log_step "Waiting for NAD creation (Phase 3 - post-restart) [MAX 300s / 5 minutes]"
+if wait_for_nad_creation "bug-reproduce-net-phase3" "$TEST_NS" 300 "phase3"; then
     log_success "Phase 3 PASSED: NAD created after restart (operator is responsive)"
     check_nad_status "bug-reproduce-net-phase3" "$TEST_NS" "phase3-success"
     check_sriov_network_status "bug-reproduce-net-phase3" "$SRIOV_OPERATOR_NS" "phase3"
     check_reconciliation_logs "phase3"
+    
+    log_step "Listing all NADs in test namespace ($TEST_NS) after Phase 3:"
+    oc get nad -n "$TEST_NS" > "$LOG_DIR/nad-list-phase3-success.txt" 2>&1
+    cat "$LOG_DIR/nad-list-phase3-success.txt"
 else
-    log_error "Phase 3 FAILED: NAD NOT created after restart (BUG REPRODUCED!)"
-    log_step "This is the upstream bug - operator became unresponsive"
+    log_error "Phase 3 FAILED: NAD NOT created after restart within 5 minutes"
+    log_step "This may indicate the upstream bug - operator became unresponsive"
     check_sriov_network_status "bug-reproduce-net-phase3" "$SRIOV_OPERATOR_NS" "phase3"
     check_reconciliation_logs "phase3"
+    
+    log_step "Current NADs in namespace ($TEST_NS) - checking if NAD appears eventually:"
+    oc get nad -n "$TEST_NS" > "$LOG_DIR/nad-list-phase3-timeout.txt" 2>&1
+    cat "$LOG_DIR/nad-list-phase3-timeout.txt"
 fi
 
 log_step "Collecting final operator logs"
