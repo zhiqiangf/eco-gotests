@@ -69,12 +69,14 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		// ==================== PHASE 1: Setup Telco Network Topology ====================
 		By("PHASE 1: Setting up telco network topology with multiple SR-IOV networks")
 
-		testNamespace := "e2e-telco-" + testDeviceConfig.Name
-		mgmtNetworkName := "telco-mgmt-" + testDeviceConfig.Name
-		userPlaneNetworkName := "telco-userplane-" + testDeviceConfig.Name
-		signalingNetworkName := "telco-signaling-" + testDeviceConfig.Name
+	// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
+	timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	testNamespace := "e2e-telco-" + testDeviceConfig.Name + "-" + timestamp
+	mgmtNetworkName := "telco-mgmt-" + testDeviceConfig.Name
+	userPlaneNetworkName := "telco-userplane-" + testDeviceConfig.Name
+	signalingNetworkName := "telco-signaling-" + testDeviceConfig.Name
 
-		// Create namespace
+	// Create namespace
 		ns := namespace.NewBuilder(getAPIClient(), testNamespace)
 		for key, value := range params.PrivilegedNSLabels {
 			ns.WithLabel(key, value)

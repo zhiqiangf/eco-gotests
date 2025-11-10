@@ -2,6 +2,7 @@ package sriov
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -105,8 +106,10 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 			Skip("No SR-IOV devices available for data plane testing")
 		}
 
-		testNamespace = "e2e-reinstall-dataplane-" + testDeviceConfig.Name
-		testNetworkName = "reinstall-test-net-" + testDeviceConfig.Name
+	// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
+	timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	testNamespace = "e2e-reinstall-dataplane-" + testDeviceConfig.Name + "-" + timestamp
+	testNetworkName = "reinstall-test-net-" + testDeviceConfig.Name
 
 		// Create namespace for data plane test
 		nsBuilder := namespace.NewBuilder(getAPIClient(), testNamespace)
@@ -192,11 +195,13 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 			Skip("No SR-IOV devices available for reinstallation testing")
 		}
 
-		testNamespace = "e2e-reinstall-full-" + testDeviceConfig.Name
-		testNetworkName = "reinstall-full-net-" + testDeviceConfig.Name
+	// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
+	timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	testNamespace = "e2e-reinstall-full-" + testDeviceConfig.Name + "-" + timestamp
+	testNetworkName = "reinstall-full-net-" + testDeviceConfig.Name
 
-		// Create namespace
-		nsBuilder := namespace.NewBuilder(getAPIClient(), testNamespace)
+	// Create namespace
+	nsBuilder := namespace.NewBuilder(getAPIClient(), testNamespace)
 		for key, value := range params.PrivilegedNSLabels {
 			nsBuilder.WithLabel(key, value)
 		}

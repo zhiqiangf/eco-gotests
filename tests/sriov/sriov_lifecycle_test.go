@@ -2,6 +2,7 @@ package sriov
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -75,9 +76,11 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 			Skip("No SR-IOV devices available for component cleanup testing")
 		}
 
-		testNamespace = "e2e-lifecycle-cleanup-" + testDeviceConfig.Name
-		testNetworkName = "lifecycle-cleanup-net-" + testDeviceConfig.Name
-		testPolicyName = testDeviceConfig.Name
+	// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
+	timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	testNamespace = "e2e-lifecycle-cleanup-" + testDeviceConfig.Name + "-" + timestamp
+	testNetworkName = "lifecycle-cleanup-net-" + testDeviceConfig.Name
+	testPolicyName = testDeviceConfig.Name
 
 		// Create namespace for test
 		nsBuilder := namespace.NewBuilder(getAPIClient(), testNamespace)
