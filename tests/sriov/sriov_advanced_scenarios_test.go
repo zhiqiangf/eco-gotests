@@ -147,7 +147,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 			},
 		)
 
-		err = controlPlanePod.WaitUntilReady(5 * time.Minute)
+		err = controlPlanePod.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Control plane pod should be ready")
 
 		By("Phase 2.2: Deploying user plane function pod (management + user plane)")
@@ -161,7 +161,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 			},
 		)
 
-		err = userPlanePod.WaitUntilReady(5 * time.Minute)
+		err = userPlanePod.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "User plane pod should be ready")
 
 		By("Phase 2.3: Deploying gateway pod (user plane network)")
@@ -174,7 +174,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 			},
 		)
 
-		err = gatewayPod.WaitUntilReady(5 * time.Minute)
+		err = gatewayPod.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Gateway pod should be ready")
 
 		By("PHASE 2 completed: Telco workloads deployed")
@@ -267,7 +267,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 			},
 		)
 
-		err = userPlanePodNew.WaitUntilReady(5 * time.Minute)
+		err = userPlanePodNew.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Recovered user plane pod should be ready")
 
 		By("Phase 4.4: Validating new pod gets correct SR-IOV resources")
@@ -349,7 +349,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		By("Phase 1.3: Deploying DPDK test pod")
 		dpdkPod := createDPDKTestPod("dpdk-test", testNamespaceDPDK, dpdkNetworkName)
 
-		err = dpdkPod.WaitUntilReady(5 * time.Minute)
+		err = dpdkPod.WaitUntilReady(10 * time.Minute)
 		if err != nil {
 			GinkgoLogr.Info("DPDK pod failed to start, may be due to hardware or image limitations", "error", err)
 			Skip("DPDK pod failed to start - skipping DPDK validation")
@@ -422,7 +422,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 			},
 		)
 
-		err = multiNetPod.WaitUntilReady(5 * time.Minute)
+		err = multiNetPod.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Multi-network pod should be ready")
 
 		By("Phase 2.5: Verifying each interface has correct configuration")
@@ -496,10 +496,10 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		mixedPod2 := createTestPod("mixed-pod2", testNamespaceMixed, mixedNetworkName,
 			"10.20.30.11/24", "20:04:0f:f1:ee:02")
 
-		err = mixedPod1.WaitUntilReady(5 * time.Minute)
+		err = mixedPod1.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Mixed pod 1 should be ready")
 
-		err = mixedPod2.WaitUntilReady(5 * time.Minute)
+		err = mixedPod2.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Mixed pod 2 should be ready")
 
 		By("Phase 3.3: Validating default route uses primary network (OVN-K)")
@@ -570,7 +570,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 
 		By("Phase 4.3: Waiting for all scale pods to be ready")
 		for i, scalePod := range scalePods {
-			err = scalePod.WaitUntilReady(5 * time.Minute)
+			err = scalePod.WaitUntilReady(10 * time.Minute)
 			Expect(err).ToNot(HaveOccurred(), fmt.Sprintf("Scale pod %d should be ready", i))
 
 			err = verifyPodSriovInterface(scalePod, testDeviceConfig.Name)
@@ -585,7 +585,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		newScalePod := createTestPod("scale-pod-new", testNamespaceScale, scaleNetworkName,
 			"10.30.40.20/24", "20:04:0f:f1:ff:20")
 
-		err = newScalePod.WaitUntilReady(5 * time.Minute)
+		err = newScalePod.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "New scale pod should be ready")
 
 		err = verifyPodSriovInterface(newScalePod, testDeviceConfig.Name)

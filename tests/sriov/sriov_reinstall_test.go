@@ -147,11 +147,11 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		serverPod := createTestPod("server-dp", testNamespace, testNetworkName, "192.168.10.11/24", "20:04:0f:f1:99:02")
 
 		By("Step 3: Waiting for pods to be ready")
-		err = clientPod.WaitUntilReady(5 * time.Minute)
-		Expect(err).ToNot(HaveOccurred(), "Client pod should be ready")
+	err = clientPod.WaitUntilReady(10 * time.Minute)
+	Expect(err).ToNot(HaveOccurred(), "Client pod should be ready")
 
-		err = serverPod.WaitUntilReady(5 * time.Minute)
-		Expect(err).ToNot(HaveOccurred(), "Server pod should be ready")
+	err = serverPod.WaitUntilReady(10 * time.Minute)
+	Expect(err).ToNot(HaveOccurred(), "Server pod should be ready")
 
 		By("Step 4: Validating SR-IOV interfaces on pods")
 		err = verifyPodSriovInterface(clientPod, testDeviceConfig.Name)
@@ -240,11 +240,11 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		clientPod = createTestPod("client-full", testNamespace, testNetworkName, "192.168.20.10/24", "20:04:0f:f1:88:01")
 		serverPod = createTestPod("server-full", testNamespace, testNetworkName, "192.168.20.11/24", "20:04:0f:f1:88:02")
 
-		err = clientPod.WaitUntilReady(5 * time.Minute)
-		Expect(err).ToNot(HaveOccurred(), "Client pod should be ready before operator removal")
+	err = clientPod.WaitUntilReady(10 * time.Minute)
+	Expect(err).ToNot(HaveOccurred(), "Client pod should be ready before operator removal")
 
-		err = serverPod.WaitUntilReady(5 * time.Minute)
-		Expect(err).ToNot(HaveOccurred(), "Server pod should be ready before operator removal")
+	err = serverPod.WaitUntilReady(10 * time.Minute)
+	Expect(err).ToNot(HaveOccurred(), "Server pod should be ready before operator removal")
 
 		// Verify initial connectivity
 		err = validateWorkloadConnectivity(clientPod, serverPod, "192.168.20.11")

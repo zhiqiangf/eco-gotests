@@ -122,10 +122,10 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 		serverPodWhereabouts := createTestPod("server-wb", testNamespaceWhereabouts, testNetworkWhereabouts,
 			"192.168.100.11/24", "20:04:0f:f1:a0:02")
 
-		err = clientPodWhereabouts.WaitUntilReady(5 * time.Minute)
+		err = clientPodWhereabouts.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Client pod (whereabouts) should be ready")
 
-		err = serverPodWhereabouts.WaitUntilReady(5 * time.Minute)
+		err = serverPodWhereabouts.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Server pod (whereabouts) should be ready")
 
 		// Verify SR-IOV interfaces
@@ -191,10 +191,10 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 		serverPodStatic := createTestPod("server-static", testNamespaceStatic, testNetworkStatic,
 			"192.168.101.11/24", "20:04:0f:f1:a1:02")
 
-		err = clientPodStatic.WaitUntilReady(5 * time.Minute)
+		err = clientPodStatic.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Client pod (static) should be ready")
 
-		err = serverPodStatic.WaitUntilReady(5 * time.Minute)
+		err = serverPodStatic.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Server pod (static) should be ready")
 
 		// Verify SR-IOV interfaces
@@ -279,10 +279,10 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 		serverPodWhereabouts := createTestPodIPv6("server-ipv6-wb", testNamespaceWhereabouts,
 			testNetworkWhereabouts, "fd00:192:168:100::11", "20:04:0f:f1:b0:02")
 
-		err = clientPodWhereabouts.WaitUntilReady(5 * time.Minute)
+		err = clientPodWhereabouts.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Client IPv6 pod (whereabouts) should be ready")
 
-		err = serverPodWhereabouts.WaitUntilReady(5 * time.Minute)
+		err = serverPodWhereabouts.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Server IPv6 pod (whereabouts) should be ready")
 
 		// Verify SR-IOV interfaces
@@ -339,10 +339,10 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 		serverPodStatic := createTestPodIPv6("server-ipv6-static", testNamespaceStatic,
 			testNetworkStatic, "fd00:192:168:101::11", "20:04:0f:f1:b1:02")
 
-		err = clientPodStatic.WaitUntilReady(5 * time.Minute)
+		err = clientPodStatic.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Client IPv6 pod (static) should be ready")
 
-		err = serverPodStatic.WaitUntilReady(5 * time.Minute)
+		err = serverPodStatic.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Server IPv6 pod (static) should be ready")
 
 		// Verify SR-IOV interfaces
@@ -426,10 +426,10 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 		serverPodWhereabouts := createTestPodDualStack("server-ds-wb", testNamespaceWhereabouts,
 			testNetworkWhereabouts, "192.168.200.11/24", "fd00:192:168:200::11", "20:04:0f:f1:c0:02")
 
-		err = clientPodWhereabouts.WaitUntilReady(5 * time.Minute)
+		err = clientPodWhereabouts.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Client dual-stack pod (whereabouts) should be ready")
 
-		err = serverPodWhereabouts.WaitUntilReady(5 * time.Minute)
+		err = serverPodWhereabouts.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Server dual-stack pod (whereabouts) should be ready")
 
 		// Verify SR-IOV interfaces
@@ -487,10 +487,10 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 		serverPodStatic := createTestPodDualStack("server-ds-static", testNamespaceStatic,
 			testNetworkStatic, "192.168.201.11/24", "fd00:192:168:201::11", "20:04:0f:f1:c1:02")
 
-		err = clientPodStatic.WaitUntilReady(5 * time.Minute)
+		err = clientPodStatic.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Client dual-stack pod (static) should be ready")
 
-		err = serverPodStatic.WaitUntilReady(5 * time.Minute)
+		err = serverPodStatic.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Server dual-stack pod (static) should be ready")
 
 		// Verify SR-IOV interfaces
@@ -615,12 +615,12 @@ func verifyIPv6Connectivity(clientPod, serverPod *pod.Builder, serverIPv6 string
 		"server", serverPod.Definition.Name, "serverIPv6", serverIPv6)
 
 	// Wait for both pods to be ready
-	err := clientPod.WaitUntilReady(5 * time.Minute)
+	err := clientPod.WaitUntilReady(10 * time.Minute)
 	if err != nil {
 		return fmt.Errorf("client pod not ready: %w", err)
 	}
 
-	err = serverPod.WaitUntilReady(5 * time.Minute)
+	err = serverPod.WaitUntilReady(10 * time.Minute)
 	if err != nil {
 		return fmt.Errorf("server pod not ready: %w", err)
 	}

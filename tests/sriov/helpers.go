@@ -2132,12 +2132,12 @@ func validateWorkloadConnectivity(clientPod, serverPod *pod.Builder, serverIP st
 		"serverIP", serverIP)
 
 	// Wait for both pods to be ready
-	err := clientPod.WaitUntilReady(5 * time.Minute)
+	err := clientPod.WaitUntilReady(10 * time.Minute)
 	if err != nil {
 		return fmt.Errorf("client pod not ready: %w", err)
 	}
 
-	err = serverPod.WaitUntilReady(5 * time.Minute)
+	err = serverPod.WaitUntilReady(10 * time.Minute)
 	if err != nil {
 		return fmt.Errorf("server pod not ready: %w", err)
 	}

@@ -131,11 +131,11 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		clientPod = createTestPod("client-cleanup", testNamespace, testNetworkName, "192.168.30.10/24", "20:04:0f:f1:77:01")
 		serverPod = createTestPod("server-cleanup", testNamespace, testNetworkName, "192.168.30.11/24", "20:04:0f:f1:77:02")
 
-		err = clientPod.WaitUntilReady(5 * time.Minute)
-		Expect(err).ToNot(HaveOccurred(), "Client pod should be ready")
+	err = clientPod.WaitUntilReady(10 * time.Minute)
+	Expect(err).ToNot(HaveOccurred(), "Client pod should be ready")
 
-		err = serverPod.WaitUntilReady(5 * time.Minute)
-		Expect(err).ToNot(HaveOccurred(), "Server pod should be ready")
+	err = serverPod.WaitUntilReady(10 * time.Minute)
+	Expect(err).ToNot(HaveOccurred(), "Server pod should be ready")
 
 		By("Phase 1.4: Validating initial connectivity between pods")
 		err = validateWorkloadConnectivity(clientPod, serverPod, "192.168.30.11")

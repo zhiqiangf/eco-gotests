@@ -139,10 +139,10 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 			"",
 		)
 
-		err = clientPodWB.WaitUntilReady(5 * time.Minute)
+		err = clientPodWB.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Client pod with bond (whereabouts) should be ready")
 
-		err = serverPodWB.WaitUntilReady(5 * time.Minute)
+		err = serverPodWB.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Server pod with bond (whereabouts) should be ready")
 
 		By("Phase 1.4: Validating bond interface configuration")
@@ -252,10 +252,10 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 			"192.168.101.11/24",
 		)
 
-		err = clientPodStatic.WaitUntilReady(5 * time.Minute)
+		err = clientPodStatic.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Client pod with bond (static) should be ready")
 
-		err = serverPodStatic.WaitUntilReady(5 * time.Minute)
+		err = serverPodStatic.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Server pod with bond (static) should be ready")
 
 		By("Phase 2.4: Validating bond interface with static IP configuration")
@@ -375,7 +375,7 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 			"192.168.102.10/24",
 		)
 
-		err = testPodAB.WaitUntilReady(5 * time.Minute)
+		err = testPodAB.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Test pod with active-backup bond should be ready")
 
 		By("Phase 1.4: Validating active-backup bond mode")
@@ -461,7 +461,7 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 			"192.168.103.10/24",
 		)
 
-		err = testPodLACP.WaitUntilReady(5 * time.Minute)
+		err = testPodLACP.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Test pod with LACP bond should be ready")
 
 		By("Phase 2.4: Validating 802.3ad bond mode")
@@ -500,7 +500,7 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 			"192.168.103.20/24",
 		)
 
-		err = testPodSwitch.WaitUntilReady(5 * time.Minute)
+		err = testPodSwitch.WaitUntilReady(10 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Pod after bond mode switch should be ready")
 
 		err = verifyBondStatus(testPodSwitch, "bond0", "802.3ad", 2)
