@@ -72,9 +72,22 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 			}
 		}
 
-		if !executed {
-			Skip("No SR-IOV devices available for component cleanup testing")
-		}
+	if !executed {
+		Skip("No SR-IOV devices available for component cleanup testing")
+	}
+
+	// IMPORTANT: Capture the current Subscription BEFORE any operator removal
+	// This ensures we can restore with the exact same configuration
+	By("Capturing operator Subscription configuration for later restoration")
+	capturedSubscription, err := getOperatorSubscription(getAPIClient(), sriovOpNs)
+	if err != nil {
+		GinkgoLogr.Info("Warning: Could not capture subscription, will use default restoration", "error", err)
+	} else {
+		GinkgoLogr.Info("Operator Subscription captured successfully", 
+			"name", capturedSubscription.Definition.Name,
+			"channel", capturedSubscription.Definition.Spec.Channel,
+			"source", capturedSubscription.Definition.Spec.Source)
+	}
 
 	// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
@@ -82,7 +95,7 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 	testNetworkName = "lifecycle-cleanup-net-" + testDeviceConfig.Name
 	testPolicyName = testDeviceConfig.Name
 
-		// Create namespace for test
+	// Create namespace for test
 		nsBuilder := namespace.NewBuilder(getAPIClient(), testNamespace)
 		for key, value := range params.PrivilegedNSLabels {
 			nsBuilder.WithLabel(key, value)
@@ -198,28 +211,31 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 
 		GinkgoLogr.Info("Phase 3 completed: CRDs remain, workloads still operational")
 
-		// ==================== PHASE 4: OPERATOR REINSTALLATION ====================
-		By("PHASE 4: Reinstalling SR-IOV operator")
+	// ==================== PHASE 4: OPERATOR REINSTALLATION ====================
+	By("PHASE 4: Reinstalling SR-IOV operator")
 
-		By("Phase 4.1: Triggering operator reinstallation")
-		sub, err := getOperatorSubscription(getAPIClient(), sriovOpNs)
-		operatorRestored := false
+	By("Phase 4.1: Triggering operator reinstallation using captured Subscription configuration")
+	operatorRestored := false
 
+	// Use the subscription we captured BEFORE deletion to ensure exact restoration
+	if capturedSubscription != nil {
+		GinkgoLogr.Info("Restoring operator with captured Subscription configuration", 
+			"name", capturedSubscription.Definition.Name,
+			"channel", capturedSubscription.Definition.Spec.Channel,
+			"source", capturedSubscription.Definition.Spec.Source)
+		// Update subscription to trigger reinstallation
+		_, err = capturedSubscription.Update()
+		Expect(err).ToNot(HaveOccurred(), "Failed to update captured subscription for reinstallation")
+	} else {
+		GinkgoLogr.Info("Captured Subscription was nil, attempting manual operator restoration")
+		// Try manual restoration if subscription was not captured
+		err = manuallyRestoreOperatorWithCapturedConfig(getAPIClient(), sriovOpNs, nil)
 		if err != nil {
-			GinkgoLogr.Info("Subscription not found, attempting manual operator restoration", "error", err)
-			// Try manual restoration if subscription is missing
-			err = manuallyRestoreOperator(getAPIClient(), sriovOpNs)
-			if err != nil {
-				GinkgoLogr.Info("Manual restoration attempt failed", "error", err)
-				// Don't skip - instead, fail explicitly so subsequent tests aren't silently affected
-				Fail("CRITICAL: Failed to restore SR-IOV operator - subsequent tests will fail. Manual intervention required.")
-			}
-		} else {
-			// Update subscription to trigger reinstallation
-			GinkgoLogr.Info("Triggering reinstallation via subscription", "subscription", sub.Definition.Name)
-			_, err = sub.Update()
-			Expect(err).ToNot(HaveOccurred(), "Failed to update subscription")
+			GinkgoLogr.Info("Manual restoration attempt failed", "error", err)
+			// Don't skip - instead, fail explicitly so subsequent tests aren't silently affected
+			Fail("CRITICAL: Failed to restore SR-IOV operator - subsequent tests will fail. Manual intervention required.")
 		}
+	}
 
 		By("Phase 4.2: Waiting for operator to reinstall")
 		err = waitForOperatorReinstall(getAPIClient(), sriovOpNs, 10*time.Minute)

@@ -178,22 +178,35 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		var clientPod, serverPod *pod.Builder
 		executed := false
 
-		// ==================== SETUP PHASE ====================
-		By("SETUP: Creating test configuration with SR-IOV workloads")
+	// ==================== SETUP PHASE ====================
+	By("SETUP: Creating test configuration with SR-IOV workloads")
 
-		// Find a suitable device for testing
-		for _, data := range testData {
-			result := initVF(data.Name, data.DeviceID, data.InterfaceName, data.Vendor, sriovOpNs, vfNum, workerNodes)
-			if result {
-				testDeviceConfig = data
-				executed = true
-				break
-			}
-		}
+	// IMPORTANT: Capture the current Subscription BEFORE any operator removal
+	// This ensures we can restore with the exact same configuration
+	By("Capturing operator Subscription configuration for later restoration")
+	capturedSubscription, err := getOperatorSubscription(getAPIClient(), sriovOpNs)
+	if err != nil {
+		GinkgoLogr.Info("Warning: Could not capture subscription, will use default restoration", "error", err)
+	} else {
+		GinkgoLogr.Info("Operator Subscription captured successfully", 
+			"name", capturedSubscription.Definition.Name,
+			"channel", capturedSubscription.Definition.Spec.Channel,
+			"source", capturedSubscription.Definition.Spec.Source)
+	}
 
-		if !executed {
-			Skip("No SR-IOV devices available for reinstallation testing")
+	// Find a suitable device for testing
+	for _, data := range testData {
+		result := initVF(data.Name, data.DeviceID, data.InterfaceName, data.Vendor, sriovOpNs, vfNum, workerNodes)
+		if result {
+			testDeviceConfig = data
+			executed = true
+			break
 		}
+	}
+
+	if !executed {
+		Skip("No SR-IOV devices available for reinstallation testing")
+	}
 
 	// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
@@ -202,11 +215,11 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 
 	// Create namespace
 	nsBuilder := namespace.NewBuilder(getAPIClient(), testNamespace)
-		for key, value := range params.PrivilegedNSLabels {
-			nsBuilder.WithLabel(key, value)
-		}
-		_, err := nsBuilder.Create()
-		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
+	for key, value := range params.PrivilegedNSLabels {
+		nsBuilder.WithLabel(key, value)
+	}
+	_, err = nsBuilder.Create()
+	Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
 
 		defer func() {
 			By("CLEANUP: Removing all test resources")
@@ -310,27 +323,29 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 
 		GinkgoLogr.Info("Phase 1 completed: Operator removed, workloads still operational")
 
-		// ==================== PHASE 2: OPERATOR REINSTALLATION ====================
-		By("PHASE 2: Reinstalling SR-IOV operator via OLM")
+	// ==================== PHASE 2: OPERATOR REINSTALLATION ====================
+	By("PHASE 2: Reinstalling SR-IOV operator via OLM")
 
-		By("Phase 2.1: Triggering operator reinstallation")
-		// Get the subscription to trigger reinstallation
-		sub, err := getOperatorSubscription(getAPIClient(), sriovOpNs)
+	By("Phase 2.1: Triggering operator reinstallation using captured Subscription configuration")
+	// Use the subscription we captured BEFORE deletion to ensure exact restoration
+	if capturedSubscription != nil {
+		GinkgoLogr.Info("Restoring operator with captured Subscription configuration", 
+			"name", capturedSubscription.Definition.Name,
+			"channel", capturedSubscription.Definition.Spec.Channel,
+			"source", capturedSubscription.Definition.Spec.Source)
+		// Update subscription to trigger reinstallation (no-op update)
+		_, err = capturedSubscription.Update()
+		Expect(err).ToNot(HaveOccurred(), "Failed to update captured subscription for reinstallation")
+	} else {
+		GinkgoLogr.Info("Captured Subscription was nil, attempting manual operator restoration")
+		// Try manual restoration if subscription was not captured
+		err = manuallyRestoreOperatorWithCapturedConfig(getAPIClient(), sriovOpNs, nil)
 		if err != nil {
-			GinkgoLogr.Info("Subscription not found, attempting manual operator restoration", "error", err)
-			// Try manual restoration if subscription is missing
-			err = manuallyRestoreOperator(getAPIClient(), sriovOpNs)
-			if err != nil {
-				GinkgoLogr.Info("Manual restoration attempt failed", "error", err)
-				// Don't skip - fail explicitly so subsequent tests aren't silently affected
-				Fail("CRITICAL: Failed to restore SR-IOV operator - subsequent tests will fail. Manual intervention required.")
-			}
-		} else {
-			// Update subscription to trigger reinstallation (no-op update)
-			GinkgoLogr.Info("Triggering reinstallation via subscription", "subscription", sub.Definition.Name)
-			_, err = sub.Update()
-			Expect(err).ToNot(HaveOccurred(), "Failed to update subscription")
+			GinkgoLogr.Info("Manual restoration attempt failed", "error", err)
+			// Don't skip - fail explicitly so subsequent tests aren't silently affected
+			Fail("CRITICAL: Failed to restore SR-IOV operator - subsequent tests will fail. Manual intervention required.")
 		}
+	}
 
 		By("Phase 2.2: Waiting for new CSV and operator pods")
 		err = waitForOperatorReinstall(getAPIClient(), sriovOpNs, 10*time.Minute)

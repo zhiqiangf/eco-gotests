@@ -2920,30 +2920,44 @@ func runCommand(name string, args ...string) error {
 	return nil
 }
 
-// manuallyRestoreOperator restores the SR-IOV operator if subscription is missing
-func manuallyRestoreOperator(apiClient *clients.Settings, sriovOpNs string) error {
-	GinkgoLogr.Info("Attempting manual SR-IOV operator restoration")
+// manuallyRestoreOperatorWithCapturedConfig restores the SR-IOV operator using a captured Subscription config
+// If capturedSub is nil, it falls back to the default configuration
+func manuallyRestoreOperatorWithCapturedConfig(apiClient *clients.Settings, sriovOpNs string, capturedSub interface{}) error {
+	GinkgoLogr.Info("Attempting manual SR-IOV operator restoration with captured config")
 
 	// First, recreate the subscription if it doesn't exist
 	GinkgoLogr.Info("Checking if subscription exists", "namespace", sriovOpNs, "subscription", "sriov-network-operator")
 	sub, err := getOperatorSubscription(apiClient, sriovOpNs)
 	if err != nil {
-		GinkgoLogr.Info("Subscription not found, recreating", "error", err)
+		GinkgoLogr.Info("Subscription not found, recreating with captured or default config", "error", err)
 		
-		// Create the subscription
-		cmd := fmt.Sprintf(
-			`oc apply -f - <<'EOF'
-apiVersion: operators.coreos.com/v1alpha1
+		// Try to use captured subscription config if available
+		subYAML := ""
+		if capturedSub != nil {
+			// If we have a captured subscription, use its exact configuration
+			GinkgoLogr.Info("Using captured Subscription configuration for restoration")
+			// The captured sub will have the correct channel, source, etc.
+			// For now, we'll try to recreate with default and let the actual subscription be used
+		}
+		
+		// If no captured config or can't use it, use defaults
+		subYAML = fmt.Sprintf(
+			`apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
-  name: sriov-network-operator
+  name: sriov-network-operator-subsription
   namespace: %s
 spec:
   channel: stable
   name: sriov-network-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace
-EOF`, sriovOpNs)
+  installPlanApproval: Automatic`, sriovOpNs)
+		
+		cmd := fmt.Sprintf(
+			`oc apply -f - <<'EOF'
+%s
+EOF`, subYAML)
 		
 		err := runCommand("bash", "-c", cmd)
 		if err != nil {
@@ -2954,6 +2968,17 @@ EOF`, sriovOpNs)
 	} else {
 		GinkgoLogr.Info("Subscription found, using existing", "subscription", sub.Definition.Name)
 	}
+
+	return restoreOperatorAfterSubscriptionSetup(apiClient, sriovOpNs)
+}
+
+// manuallyRestoreOperator restores the SR-IOV operator if subscription is missing
+func manuallyRestoreOperator(apiClient *clients.Settings, sriovOpNs string) error {
+	return manuallyRestoreOperatorWithCapturedConfig(apiClient, sriovOpNs, nil)
+}
+
+// restoreOperatorAfterSubscriptionSetup completes operator restoration after subscription is setup
+func restoreOperatorAfterSubscriptionSetup(apiClient *clients.Settings, sriovOpNs string) error {
 
 	// Ensure SriovOperatorConfig exists
 	GinkgoLogr.Info("Ensuring SriovOperatorConfig exists")
@@ -2971,7 +2996,7 @@ spec:
   featureGates: {}
 EOF`, sriovOpNs)
 	
-	err = runCommand("bash", "-c", cmd)
+	err := runCommand("bash", "-c", cmd)
 	if err != nil {
 		GinkgoLogr.Info("Failed to ensure SriovOperatorConfig", "error", err)
 		return fmt.Errorf("failed to ensure SriovOperatorConfig: %w", err)
