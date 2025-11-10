@@ -3116,3 +3116,84 @@ EOF`, sriovOpNs)
 	return fmt.Errorf("operator pods not found after manual restoration attempt (waited 120 seconds)")
 }
 
+// waitForSriovNetworkControllerReady waits for the SR-IOV SriovNetwork controller to be ready
+// This is a workaround for upstream operator bug where controller doesn't respond after restart
+// The controller claims to start but may not actually process events
+func waitForSriovNetworkControllerReady(timeout time.Duration) error {
+	GinkgoLogr.Info("Waiting for SR-IOV SriovNetwork controller to be ready", "timeout", timeout)
+	
+	sriovOpNs := "openshift-sriov-network-operator"
+	startTime := time.Now()
+	
+	for {
+		elapsed := time.Since(startTime)
+		if elapsed > timeout {
+			GinkgoLogr.Error(nil, "SriovNetwork controller failed to become ready within timeout",
+				"elapsed", elapsed, "timeout", timeout)
+			return fmt.Errorf("sriovnetwork controller not ready after %v", timeout)
+		}
+		
+		// Check operator logs for reconciliation activity
+		cmd := exec.Command("oc", "logs", "-n", sriovOpNs, 
+			"-l", "app=sriov-network-operator",
+			"--tail=100",
+			"--timestamps=true")
+		
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			GinkgoLogr.Info("Failed to check operator logs, retrying...", "error", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		
+		logStr := string(output)
+		
+		// Check if we see recent reconciliation activity
+		// Look for "Reconciling" messages with "sriovnetwork" in the logs
+		// This indicates the controller is actively processing events
+		lines := strings.Split(logStr, "\n")
+		
+		// Check last 50 lines for recent activity
+		recentLogs := ""
+		if len(lines) > 50 {
+			recentLogs = strings.Join(lines[len(lines)-50:], "\n")
+		} else {
+			recentLogs = logStr
+		}
+		
+		if strings.Contains(recentLogs, "Starting Controller") && 
+		   strings.Contains(recentLogs, "sriovnetwork") {
+			GinkgoLogr.Info("SriovNetwork controller is starting, waiting for first reconciliation...")
+			time.Sleep(5 * time.Second)
+			
+			// Now check again to see if we got reconciliation activity
+			cmd = exec.Command("oc", "logs", "-n", sriovOpNs, 
+				"-l", "app=sriov-network-operator",
+				"--tail=50",
+				"--timestamps=true")
+			output, err = cmd.CombinedOutput()
+			if err == nil {
+				logStr = string(output)
+				// If we see "Reconciling" with sriovnetwork, controller is ready
+				if strings.Contains(logStr, "Reconciling") && strings.Contains(logStr, "SriovNetwork") {
+					GinkgoLogr.Info("SriovNetwork controller is ready and processing events")
+					return nil
+				}
+			}
+			
+			elapsed = time.Since(startTime)
+			if elapsed > 30*time.Second {
+				GinkgoLogr.Warn("SriovNetwork controller started but not processing events yet",
+					"elapsed", elapsed)
+				// This indicates the upstream operator bug - controller started but not responding
+				GinkgoLogr.Error(nil, 
+					"UPSTREAM BUG DETECTED: SriovNetwork controller not responding to events after restart. "+
+					"See UPSTREAM_OPERATOR_BUG_ANALYSIS.md for details")
+				return fmt.Errorf("sriovnetwork controller not responding to events (upstream operator bug)")
+			}
+		}
+		
+		time.Sleep(5 * time.Second)
+	}
+}
+

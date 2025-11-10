@@ -1,0 +1,276 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                                                                            ║
+║      SR-IOV OPERATOR: WHICH LINES OF CODE FOR THE QUICK FIX?              ║
+║                                                                            ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+📌 SHORT ANSWER
+═══════════════════════════════════════════════════════════════════════════════
+
+The quick fix is a RUNTIME PATCH, not a code change:
+
+    oc patch sriovoperatorconfig default --type=merge \
+      -n openshift-sriov-network-operator \
+      --patch '{ "spec": { "enableOperatorWebhook": false } }'
+
+This modifies the SriovOperatorConfig Custom Resource instance at runtime.
+No source code modification needed for the workaround.
+
+
+📂 RELEVANT SOURCE CODE FILES
+═══════════════════════════════════════════════════════════════════════════════
+
+Location: https://github.com/openshift/sriov-network-operator
+
+┌─ FILE 1: API Type Definition
+│  Path: api/v1/sriovoperatorconfig_types.go
+│  Contains: Where EnableOperatorWebhook field is declared
+│  Search for: "EnableOperatorWebhook *bool"
+│  
+│  Expected code pattern:
+│  ┌──────────────────────────────────────────────────┐
+│  │ type SriovOperatorConfigSpec struct {             │
+│  │     // ...                                         │
+│  │     EnableOperatorWebhook *bool `json:"enable..." │
+│  │     // ...                                         │
+│  │ }                                                  │
+│  └──────────────────────────────────────────────────┘
+│
+├─ FILE 2: CRD Manifest
+│  Path: config/crd/bases/sriovnetwork.openshift.io_sriovoperatorconfigs.yaml
+│  Contains: The actual CRD deployed to the cluster
+│  Search for: "enableOperatorWebhook"
+│  
+│  Expected YAML:
+│  ┌──────────────────────────────────────────────────┐
+│  │ - name: enableOperatorWebhook                     │
+│  │   type: boolean                                   │
+│  │   description: "enable admission controller..."  │
+│  └──────────────────────────────────────────────────┘
+│
+├─ FILE 3: Controller Logic (WHERE THE MAGIC HAPPENS)
+│  Path: controllers/sriovoperatorconfig_controller.go
+│  Contains: Logic that reacts to EnableOperatorWebhook changes
+│  Search for: "EnableOperatorWebhook" or "setupWebhook"
+│  
+│  Expected code pattern:
+│  ┌──────────────────────────────────────────────────┐
+│  │ func (r *SriovOperatorConfigReconciler) Reconcile │
+│  │   // Get config                                  │
+│  │   cfg := &SriovOperatorConfig{}                  │
+│  │   r.Get(ctx, req.NamespacedName, cfg)           │
+│  │   // Check webhook flag                          │
+│  │   if cfg.Spec.EnableOperatorWebhook != nil &&   │
+│  │      !*cfg.Spec.EnableOperatorWebhook {          │
+│  │       // Webhook is disabled - don't deploy it  │
+│  │   }                                               │
+│  └──────────────────────────────────────────────────┘
+│
+├─ FILE 4: Webhook Registration (THE BUG IS HERE)
+│  Path: pkg/webhook/sriovnetwork_webhook.go
+│       (or similar webhook files in pkg/webhook/)
+│  Contains: Webhook validation logic and registration
+│  Search for: "+kubebuilder:webhook:" and "failurePolicy"
+│  
+│  Current (BROKEN):
+│  ┌──────────────────────────────────────────────────┐
+│  │ // +kubebuilder:webhook:path=/validate...,       │
+│  │ //   failurePolicy=fail, ← REJECTS ON FAILURE   │
+│  │ //   ...                                          │
+│  │ type SriovNetworkValidator struct {}             │
+│  │ func (v *SriovNetworkValidator) ValidateSriov... │
+│  │   // This validation can reject valid CRs       │
+│  │   // when hardware is unsupported!              │
+│  └──────────────────────────────────────────────────┘
+│  
+│  Better (TO FIX):
+│  ┌──────────────────────────────────────────────────┐
+│  │ // +kubebuilder:webhook:path=/validate...,       │
+│  │ //   failurePolicy=ignore, ← ALLOWS ANYWAY      │
+│  │ //   ...                                          │
+│  └──────────────────────────────────────────────────┘
+│
+├─ FILE 5: Main Setup
+│  Path: cmd/manager/main.go
+│  Contains: Webhook registration during startup
+│  Search for: "SetupWebhook" or "SetupWebhookWithManager"
+│  
+│  Expected code pattern:
+│  ┌──────────────────────────────────────────────────┐
+│  │ if os.Getenv("ENABLE_WEBHOOKS") != "false" {    │
+│  │   if err = (&SriovNetwork{}).                    │
+│  │     SetupWebhookWithManager(mgr); err != nil {  │
+│  │     setupLog.Error(err, "unable to create...")  │
+│  │   }                                               │
+│  │ }                                                 │
+│  └──────────────────────────────────────────────────┘
+│
+└─ FILE 6: Validation Logic
+   Path: api/v1/sriovnetwork_types.go
+   Contains: SriovNetwork CRD type and validation
+   Search for: "ValidateCreate" or "ValidateUpdate"
+   
+   This is where the validation happens that can reject CRs
+
+
+🔍 HOW TO FIND EXACT LINE NUMBERS
+═══════════════════════════════════════════════════════════════════════════════
+
+Option 1: GitHub Web UI (Fastest)
+  1. Go to: https://github.com/openshift/sriov-network-operator
+  2. Press Ctrl+K (Go to file)
+  3. Type: api/v1/sriovoperatorconfig_types.go
+  4. Press Ctrl+F, search: "EnableOperatorWebhook"
+  5. Line numbers shown on left side
+
+Option 2: Command Line (Most Accurate)
+  ```bash
+  git clone https://github.com/openshift/sriov-network-operator
+  cd sriov-network-operator
+  
+  # Search for all occurrences
+  grep -rn "enableOperatorWebhook" api/v1/
+  grep -rn "failurePolicy" pkg/webhook/
+  grep -rn "SetupWebhook" cmd/manager/
+  grep -rn "ValidateSriovNetwork" api/v1/
+  ```
+
+Option 3: GitHub Search Feature
+  1. Go to: https://github.com/openshift/sriov-network-operator
+  2. Press Ctrl+/ or use search icon
+  3. Search: "enableOperatorWebhook"
+  4. Results show file and context
+
+
+🐛 WHERE THE BUG IS
+═══════════════════════════════════════════════════════════════════════════════
+
+PRIMARY BUG LOCATION:
+  File: pkg/webhook/sriovnetwork_webhook.go (or similar)
+  Look for: failurePolicy=fail
+  Problem: Webhook rejects CRs with unsupported hardware
+  Solution: Change to failurePolicy=ignore or add better error handling
+
+SECONDARY LOCATION (Less Common):
+  File: controllers/sriovoperatorconfig_controller.go
+  Look for: EnableOperatorWebhook logic
+  Problem: Might not properly disable webhook
+  Solution: Ensure webhook resources are removed when flag is false
+
+TERTIARY LOCATION (Rare):
+  File: api/v1/sriovnetwork_types.go
+  Look for: ValidateCreate() method
+  Problem: Validation might be too strict
+  Solution: Add fallback for unsupported hardware
+
+
+💡 HOW TO IMPLEMENT PERMANENT FIX
+═══════════════════════════════════════════════════════════════════════════════
+
+Step 1: Find the webhook decorator
+  Location: pkg/webhook/sriovnetwork_webhook.go
+  Current:  // +kubebuilder:webhook:...,failurePolicy=fail,...
+  Change to: // +kubebuilder:webhook:...,failurePolicy=ignore,...
+  
+Step 2: Find the validation method
+  Location: api/v1/sriovnetwork_types.go
+  Check:    ValidateCreate() / ValidateUpdate() methods
+  Improve:  Better error messages for unsupported hardware
+  
+Step 3: Verify controller respects the flag
+  Location: controllers/sriovoperatorconfig_controller.go
+  Check:    Webhook is disabled when EnableOperatorWebhook = false
+  
+Step 4: Update documentation
+  Location: README.md or doc/
+  Add:      Troubleshooting section for unsupported hardware
+
+
+📊 CODE FLOW DIAGRAM
+═══════════════════════════════════════════════════════════════════════════════
+
+User creates SriovNetwork
+    ↓
+Kubernetes API Server receives request
+    ↓
+ValidatingWebhookConfiguration intercepts (pkg/webhook/sriovnetwork_webhook.go)
+    ↓
+Webhook validates hardware (api/v1/sriovnetwork_types.go - ValidateCreate())
+    ├─→ Hardware supported ✓
+    │   ├─→ failurePolicy=fail: Accept CR → Stored in etcd ✓
+    │   └─→ failurePolicy=ignore: Accept CR → Stored in etcd ✓
+    │
+    └─→ Hardware not supported ✗
+        ├─→ failurePolicy=fail: REJECT request → Error to user ✗ (BUG: User sees problem)
+        └─→ failurePolicy=ignore: ACCEPT CR anyway → Stored in etcd (BUG: Silent failure)
+
+
+🔧 QUICK REFERENCE: GREP COMMANDS
+═══════════════════════════════════════════════════════════════════════════════
+
+# Find the main field definition
+grep -n "EnableOperatorWebhook" api/v1/sriovoperatorconfig_types.go
+
+# Find all webhook definitions
+grep -rn "failurePolicy" pkg/webhook/
+
+# Find controller reconciliation logic
+grep -n "Reconcile\|setupWebhook" controllers/sriovoperatorconfig_controller.go
+
+# Find webhook setup in main
+grep -n "SetupWebhook" cmd/manager/main.go
+
+# Find validation methods
+grep -n "ValidateCreate\|ValidateUpdate" api/v1/sriovnetwork_types.go
+
+# Find all references to the flag
+grep -rn "enableOperatorWebhook" . --include="*.go"
+
+
+📋 WORKAROUND vs PERMANENT FIX
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─ WORKAROUND (What I recommended)
+│  What: oc patch sriovoperatorconfig default ... enableOperatorWebhook: false
+│  Where: Applied to running Kubernetes cluster
+│  When: Immediately, without rebuilding operator
+│  Duration: Until operator is redeployed with different version
+│  Code files affected: NONE (runtime configuration change)
+│  
+├─ PERMANENT FIX (What upstream should do)
+│  What: Change failurePolicy from fail to ignore (or improve validation)
+│  Where: In the operator's source code
+│  When: After rebuild and new release
+│  Duration: Permanent in that version
+│  Code files affected: pkg/webhook/*, api/v1/sriovnetwork_types.go
+│  
+└─ BEST FIX (What maintainers should implement)
+   What: 
+     1. Change failurePolicy to ignore
+     2. Add better error messages
+     3. Make webhook conditional on EnableOperatorWebhook
+     4. Improve documentation
+   Files affected: 5-6 files across multiple directories
+   Benefit: Users don't need workarounds
+
+
+✅ TO SUMMARIZE
+═══════════════════════════════════════════════════════════════════════════════
+
+Your quick fix (the command):
+  → Patches SriovOperatorConfig resource at runtime
+  → NO source code changes needed
+  → Works immediately
+  → Gets reset if operator restarted
+
+The permanent fix (upstream code):
+  → Would be in pkg/webhook/sriovnetwork_webhook.go
+  → Change: failurePolicy=fail → failurePolicy=ignore (or similar)
+  → Requires PR to: https://github.com/openshift/sriov-network-operator
+  → Would be included in next operator release
+
+More detail:
+  → See SRIOV_OPERATOR_FIX_LOCATIONS.md for complete code locations
+  → See SRIOV_OPERATOR_SOURCE_CODE_PATTERNS.md for code patterns to search for
+
