@@ -68,7 +68,9 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 		// ==================== PHASE 1: Bond with Whereabouts IPAM ====================
 		By("PHASE 1: Testing SR-IOV bonding with Whereabouts IPAM")
 
-		testNamespaceWB := "e2e-bond-wb-" + testDeviceConfig.Name
+  // Use timestamp suffix to avoid namespace collision from previous test runs
+  timestamp := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceWB := "e2e-bond-wb-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
 		testNetworkNet1 := "bond-net1-wb-" + testDeviceConfig.Name
 		testNetworkNet2 := "bond-net2-wb-" + testDeviceConfig.Name
 		testBondNetworkWB := "bond-wb-" + testDeviceConfig.Name
@@ -184,7 +186,9 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 		// ==================== PHASE 2: Bond with Static IPAM ====================
 		By("PHASE 2: Testing SR-IOV bonding with Static IPAM")
 
-		testNamespaceStatic := "e2e-bond-static-" + testDeviceConfig.Name
+  // Use timestamp suffix to avoid namespace collision from previous test runs
+  timestamp := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceStatic := "e2e-bond-static-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
 		testNetworkNet1Static := "bond-net1-static-" + testDeviceConfig.Name
 		testNetworkNet2Static := "bond-net2-static-" + testDeviceConfig.Name
 		testBondNetworkStatic := "bond-static-" + testDeviceConfig.Name
@@ -312,7 +316,9 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 		// ==================== PHASE 1: Active-Backup Mode ====================
 		By("PHASE 1: Testing Active-Backup bonding mode (mode 1)")
 
-		testNamespaceAB := "e2e-bond-ab-" + testDeviceConfig.Name
+  // Use timestamp suffix to avoid namespace collision from previous test runs
+  timestamp := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceAB := "e2e-bond-ab-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
 		testNetworkNet1AB := "bond-net1-ab-" + testDeviceConfig.Name
 		testNetworkNet2AB := "bond-net2-ab-" + testDeviceConfig.Name
 		testBondNetworkAB := "bond-ab-" + testDeviceConfig.Name
@@ -399,7 +405,9 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 		// ==================== PHASE 2: 802.3ad/LACP Mode ====================
 		By("PHASE 2: Testing 802.3ad/LACP bonding mode (mode 4)")
 
-		testNamespaceLACP := "e2e-bond-lacp-" + testDeviceConfig.Name
+  // Use timestamp suffix to avoid namespace collision from previous test runs
+  timestamp := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceLACP := "e2e-bond-lacp-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
 		testNetworkNet1LACP := "bond-net1-lacp-" + testDeviceConfig.Name
 		testNetworkNet2LACP := "bond-net2-lacp-" + testDeviceConfig.Name
 		testBondNetworkLACP := "bond-lacp-" + testDeviceConfig.Name
