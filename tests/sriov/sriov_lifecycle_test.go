@@ -113,7 +113,7 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		for key, value := range params.PrivilegedNSLabels {
 			nsBuilder.WithLabel(key, value)
 		}
-		_, err := nsBuilder.Create()
+		_, err = nsBuilder.Create()
 		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
 
 		defer func() {

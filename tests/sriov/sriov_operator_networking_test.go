@@ -1,9 +1,9 @@
 package sriov
 
 import (
-t"fmt"
 	"bytes"
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -82,12 +82,12 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 			Skip("No SR-IOV devices available for IPv4 networking testing")
 		}
 
-		// ==================== PHASE 1: Whereabouts IPAM ====================
-		By("PHASE 1: Testing IPv4 networking with Whereabouts IPAM")
+	// ==================== PHASE 1: Whereabouts IPAM ====================
+	By("PHASE 1: Testing IPv4 networking with Whereabouts IPAM")
 
-  // Use timestamp suffix to avoid namespace collision from previous test runs
-  timestamp := fmt.Sprintf("%d", time.Now().Unix())
-		testNamespaceWhereabouts := "e2e-ipv4-whereabouts-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
+	// Use timestamp suffix to avoid namespace collision from previous test runs
+	timestampWhereabouts := fmt.Sprintf("%d", time.Now().Unix())
+	testNamespaceWhereabouts := "e2e-ipv4-whereabouts-" + testDeviceConfig.Name + "-" + timestampWhereabouts + testDeviceConfig.Name
 		testNetworkWhereabouts := "ipv4-whereabouts-net-" + testDeviceConfig.Name
 
 		// Create namespace for whereabouts test
@@ -153,12 +153,12 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 
 		By("PHASE 1 completed: Whereabouts IPAM IPv4 networking validated")
 
-		// ==================== PHASE 2: Static IPAM ====================
-		By("PHASE 2: Testing IPv4 networking with Static IPAM")
+	// ==================== PHASE 2: Static IPAM ====================
+	By("PHASE 2: Testing IPv4 networking with Static IPAM")
 
-  // Use timestamp suffix to avoid namespace collision from previous test runs
-  timestamp := fmt.Sprintf("%d", time.Now().Unix())
-		testNamespaceStatic := "e2e-ipv4-static-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
+	// Use timestamp suffix to avoid namespace collision from previous test runs
+	timestampStatic := fmt.Sprintf("%d", time.Now().Unix())
+	testNamespaceStatic := "e2e-ipv4-static-" + testDeviceConfig.Name + "-" + timestampStatic + testDeviceConfig.Name
 		testNetworkStatic := "ipv4-static-net-" + testDeviceConfig.Name
 
 		// Create namespace for static test
@@ -251,12 +251,12 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 			Skip("No SR-IOV devices available for IPv6 networking testing")
 		}
 
-		// ==================== PHASE 1: Whereabouts IPAM (IPv6) ====================
-		By("PHASE 1: Testing IPv6 networking with Whereabouts IPAM")
+	// ==================== PHASE 1: Whereabouts IPAM (IPv6) ====================
+	By("PHASE 1: Testing IPv6 networking with Whereabouts IPAM")
 
-  // Use timestamp suffix to avoid namespace collision from previous test runs
-  timestamp := fmt.Sprintf("%d", time.Now().Unix())
-		testNamespaceWhereabouts := "e2e-ipv6-whereabouts-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
+	// Use timestamp suffix to avoid namespace collision from previous test runs
+	timestampIPv6WB := fmt.Sprintf("%d", time.Now().Unix())
+	testNamespaceWhereabouts := "e2e-ipv6-whereabouts-" + testDeviceConfig.Name + "-" + timestampIPv6WB + testDeviceConfig.Name
 		testNetworkWhereabouts := "ipv6-whereabouts-net-" + testDeviceConfig.Name
 
 		nsWhereabouts := namespace.NewBuilder(getAPIClient(), testNamespaceWhereabouts)
@@ -313,12 +313,12 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 
 		By("PHASE 1 completed: Whereabouts IPAM IPv6 networking validated")
 
-		// ==================== PHASE 2: Static IPAM (IPv6) ====================
-		By("PHASE 2: Testing IPv6 networking with Static IPAM")
+	// ==================== PHASE 2: Static IPAM (IPv6) ====================
+	By("PHASE 2: Testing IPv6 networking with Static IPAM")
 
-  // Use timestamp suffix to avoid namespace collision from previous test runs
-  timestamp := fmt.Sprintf("%d", time.Now().Unix())
-		testNamespaceStatic := "e2e-ipv6-static-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
+	// Use timestamp suffix to avoid namespace collision from previous test runs
+	timestampIPv6Static := fmt.Sprintf("%d", time.Now().Unix())
+	testNamespaceStatic := "e2e-ipv6-static-" + testDeviceConfig.Name + "-" + timestampIPv6Static + testDeviceConfig.Name
 		testNetworkStatic := "ipv6-static-net-" + testDeviceConfig.Name
 
 		nsStatic := namespace.NewBuilder(getAPIClient(), testNamespaceStatic)
@@ -402,12 +402,12 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 			Skip("No SR-IOV devices available for dual-stack networking testing")
 		}
 
-		// ==================== PHASE 1: Whereabouts IPAM (Dual-Stack) ====================
-		By("PHASE 1: Testing dual-stack networking with Whereabouts IPAM")
+	// ==================== PHASE 1: Whereabouts IPAM (Dual-Stack) ====================
+	By("PHASE 1: Testing dual-stack networking with Whereabouts IPAM")
 
-  // Use timestamp suffix to avoid namespace collision from previous test runs
-  timestamp := fmt.Sprintf("%d", time.Now().Unix())
-		testNamespaceWhereabouts := "e2e-dualstack-wb-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
+	// Use timestamp suffix to avoid namespace collision from previous test runs
+	timestampDualStackWB := fmt.Sprintf("%d", time.Now().Unix())
+	testNamespaceWhereabouts := "e2e-dualstack-wb-" + testDeviceConfig.Name + "-" + timestampDualStackWB + testDeviceConfig.Name
 		testNetworkWhereabouts := "dualstack-wb-net-" + testDeviceConfig.Name
 
 		nsWhereabouts := namespace.NewBuilder(getAPIClient(), testNamespaceWhereabouts)
@@ -465,12 +465,12 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 
 		By("PHASE 1 completed: Whereabouts IPAM dual-stack networking validated")
 
-		// ==================== PHASE 2: Static IPAM (Dual-Stack) ====================
-		By("PHASE 2: Testing dual-stack networking with Static IPAM")
+	// ==================== PHASE 2: Static IPAM (Dual-Stack) ====================
+	By("PHASE 2: Testing dual-stack networking with Static IPAM")
 
-  // Use timestamp suffix to avoid namespace collision from previous test runs
-  timestamp := fmt.Sprintf("%d", time.Now().Unix())
-		testNamespaceStatic := "e2e-dualstack-static-" + testDeviceConfig.Name + "-" + timestamp + testDeviceConfig.Name
+	// Use timestamp suffix to avoid namespace collision from previous test runs
+	timestampDualStackStatic := fmt.Sprintf("%d", time.Now().Unix())
+	testNamespaceStatic := "e2e-dualstack-static-" + testDeviceConfig.Name + "-" + timestampDualStackStatic + testDeviceConfig.Name
 		testNetworkStatic := "dualstack-static-net-" + testDeviceConfig.Name
 
 		nsStatic := namespace.NewBuilder(getAPIClient(), testNamespaceStatic)
