@@ -122,6 +122,12 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		_, err = nsBuilder.Create()
 		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
 
+		// Phase 2 Enhancement: Ensure namespace is ready before proceeding
+		By("Waiting for namespace to reach Active phase (Phase 2 Enhancement - Namespace Initialization)")
+		err = ensureNamespaceReady(getAPIClient(), testNamespace, 30*time.Second)
+		Expect(err).ToNot(HaveOccurred(), "Namespace should reach Active phase")
+		GinkgoLogr.Info("Namespace is ready and Active", "namespace", testNamespace)
+
 		defer func() {
 			By("CLEANUP: Removing all test resources")
 			// Delete pods if they exist
@@ -340,7 +346,9 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 			Skip("No SR-IOV devices available for dependency testing")
 		}
 
-		testNamespace = "e2e-lifecycle-depend-" + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
+		timestamp := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespace = "e2e-lifecycle-depend-" + testDeviceConfig.Name + "-" + timestamp
 		testNetworkName = "lifecycle-depend-net-" + testDeviceConfig.Name
 		testPolicyName = testDeviceConfig.Name
 		newPolicyName = "new-policy-" + testDeviceConfig.Name
@@ -353,6 +361,12 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		}
 		_, err := nsBuilder.Create()
 		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
+
+		// Phase 2 Enhancement: Ensure namespace is ready before proceeding
+		By("Waiting for namespace to reach Active phase (Phase 2 Enhancement - Namespace Initialization)")
+		err = ensureNamespaceReady(getAPIClient(), testNamespace, 30*time.Second)
+		Expect(err).ToNot(HaveOccurred(), "Namespace should reach Active phase")
+		GinkgoLogr.Info("Namespace is ready and Active", "namespace", testNamespace)
 
 		defer func() {
 			By("CLEANUP: Removing all test resources")

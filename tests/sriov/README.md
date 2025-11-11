@@ -420,11 +420,25 @@ export GOTOOLCHAIN=auto
 go test ./tests/sriov/sriov_basic_test.go ./tests/sriov/helpers.go -v
 ```
 
-### Running only reinstallation tests:
+### Running only reinstallation tests (recommended method using label filter):
 ```bash
 export GOSUMDB=sum.golang.org
 export GOTOOLCHAIN=auto
-go test ./tests/sriov/sriov_reinstall_test.go ./tests/sriov/helpers.go -v -timeout 90m
+export SRIOV_DEVICES="cx7anl244:1021:15b3:ens2f0np0,cx6dxanl244:a2d6:15b3:ens7f0np0"
+go test ./tests/sriov -v -ginkgo.label-filter="reinstall" -timeout 90m
+```
+
+**Note:** The label filter approach (`-ginkgo.label-filter="reinstall"`) is preferred over individual file compilation because:
+- All helper functions are properly compiled together
+- Cleaner and more maintainable
+- Avoids compilation errors from missing dependencies
+
+**Alternative method (using individual test names with focus filter):**
+```bash
+export GOSUMDB=sum.golang.org
+export GOTOOLCHAIN=auto
+export SRIOV_DEVICES="cx7anl244:1021:15b3:ens2f0np0,cx6dxanl244:a2d6:15b3:ens7f0np0"
+go test ./tests/sriov -v -ginkgo.focus="control_plane_before_removal|data_plane_before_removal|reinstallation_functionality" -timeout 90m
 ```
 
 ### Running only lifecycle tests:
@@ -467,17 +481,29 @@ go test ./tests/sriov/... -v -ginkgo.focus="ipv6_functionality"
 go test ./tests/sriov/... -v -ginkgo.focus="dual_stack_functionality"
 ```
 
-### Running specific reinstallation tests by name:
+### Running specific reinstallation tests by name (individual tests):
+
+**Best practice: Set environment variables first, then run individual test:**
+
 ```bash
+export GOSUMDB=sum.golang.org
+export GOTOOLCHAIN=auto
+export SRIOV_DEVICES="cx7anl244:1021:15b3:ens2f0np0,cx6dxanl244:a2d6:15b3:ens7f0np0"
+
 # Run only control plane validation test
-go test ./tests/sriov/... -v -ginkgo.focus="control_plane_before_removal"
+go test ./tests/sriov -v -ginkgo.focus="control_plane_before_removal" -timeout 30m
 
 # Run only data plane validation test
-go test ./tests/sriov/... -v -ginkgo.focus="data_plane_before_removal"
+go test ./tests/sriov -v -ginkgo.focus="data_plane_before_removal" -timeout 30m
 
 # Run full reinstallation test
-go test ./tests/sriov/... -v -ginkgo.focus="reinstallation_functionality"
+go test ./tests/sriov -v -ginkgo.focus="reinstallation_functionality" -timeout 60m
 ```
+
+**Why use `./tests/sriov` instead of `./tests/sriov/...`:**
+- Ensures all helper functions and dependencies are compiled together
+- Avoids compilation errors from missing package dependencies
+- More reliable and consistent test execution
 
 ### Running specific bonding tests by name:
 ```bash
@@ -529,6 +555,50 @@ go test ./tests/sriov/... -v -ginkgo.label-filter="advanced-scenarios" -timeout 
 
 # Run basic tests only (exclude reinstall, lifecycle, operator-networking, bonding, and advanced-scenarios)
 go test ./tests/sriov/... -v -ginkgo.label-filter="basic" -timeout 60m
+```
+
+### Quick Reference: Running Test Sets vs Individual Tests
+
+**To run a complete test set (e.g., all reinstallation tests):**
+```bash
+export GOSUMDB=sum.golang.org
+export GOTOOLCHAIN=auto
+export SRIOV_DEVICES="cx7anl244:1021:15b3:ens2f0np0,cx6dxanl244:a2d6:15b3:ens7f0np0"
+go test ./tests/sriov -v -ginkgo.label-filter="reinstall" -timeout 90m
+```
+
+**To run a single test within a set (e.g., control plane test only):**
+```bash
+export GOSUMDB=sum.golang.org
+export GOTOOLCHAIN=auto
+export SRIOV_DEVICES="cx7anl244:1021:15b3:ens2f0np0,cx6dxanl244:a2d6:15b3:ens7f0np0"
+go test ./tests/sriov -v -ginkgo.focus="control_plane_before_removal" -timeout 30m
+```
+
+**Complete List of Test Sets and Individual Tests:**
+
+| Test Set | Label Filter | Individual Tests |
+|----------|--------------|------------------|
+| **Reinstallation** | `ginkgo.label-filter="reinstall"` | `control_plane_before_removal`, `data_plane_before_removal`, `reinstallation_functionality` |
+| **Lifecycle** | `ginkgo.label-filter="lifecycle"` | `components_cleanup_on_removal`, `resource_deployment_dependency` |
+| **Operator Networking** | `ginkgo.label-filter="operator-networking"` | `ipv4_functionality`, `ipv6_functionality`, `dual_stack_functionality` |
+| **Bonding** | `ginkgo.label-filter="bonding"` | `bond_ipam_integration`, `bond_mode_operator_level` |
+| **Advanced Scenarios** | `ginkgo.label-filter="advanced-scenarios"` | `end_to_end_telco_scenario`, `multi_feature_integration` |
+| **Basic** | `ginkgo.label-filter="basic"` | 9 basic SR-IOV functionality tests |
+
+**Example Commands:**
+```bash
+# Run all reinstallation tests
+go test ./tests/sriov -v -ginkgo.label-filter="reinstall" -timeout 90m
+
+# Run only the control plane test from reinstallation set
+go test ./tests/sriov -v -ginkgo.focus="control_plane_before_removal" -timeout 30m
+
+# Run all bonding tests
+go test ./tests/sriov -v -ginkgo.label-filter="bonding" -timeout 120m
+
+# Run only IPv4 networking test
+go test ./tests/sriov -v -ginkgo.focus="ipv4_functionality" -timeout 60m
 ```
 
 ### Run with debugging options:
