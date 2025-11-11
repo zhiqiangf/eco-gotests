@@ -43,24 +43,30 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 	BeforeEach(func() {
 		By("Verifying SR-IOV operator status before test")
 		chkSriovOperatorStatus(sriovOpNs)
+		GinkgoLogr.Info("SR-IOV operator status verified", "namespace", sriovOpNs)
 
 		By("Discovering worker nodes")
 		var err error
 		workerNodes, err = nodes.List(getAPIClient(),
 			metav1.ListOptions{LabelSelector: labels.Set(NetConfig.WorkerLabelMap).String()})
 		Expect(err).ToNot(HaveOccurred(), "Failed to discover worker nodes")
+		GinkgoLogr.Info("Worker nodes discovered", "count", len(workerNodes))
 	})
 
 	It("test_sriov_operator_control_plane_before_removal - Validate control plane operational before removal [Disruptive] [Serial]", func() {
+		By("CONTROL PLANE VALIDATION - Pre-removal verification")
+		GinkgoLogr.Info("Starting control plane validation", "namespace", sriovOpNs)
+
 		By("Step 1: Validating operator pods are running")
 		err := validateOperatorControlPlane(getAPIClient(), sriovOpNs)
 		Expect(err).ToNot(HaveOccurred(), "Control plane validation failed")
+		GinkgoLogr.Info("Operator pods verification passed", "namespace", sriovOpNs)
 
-	By("Step 2: Checking CSV status")
-	csv, err := getOperatorCSV(getAPIClient(), sriovOpNs)
-	Expect(err).ToNot(HaveOccurred(), "Failed to get operator CSV")
-	Expect(string(csv.Definition.Status.Phase)).To(Equal("Succeeded"), "CSV should be in Succeeded phase")
-	GinkgoLogr.Info("CSV validation passed", "csvName", csv.Definition.Name, "phase", csv.Definition.Status.Phase)
+		By("Step 2: Checking CSV status")
+		csv, err := getOperatorCSV(getAPIClient(), sriovOpNs)
+		Expect(err).ToNot(HaveOccurred(), "Failed to get operator CSV")
+		Expect(string(csv.Definition.Status.Phase)).To(Equal("Succeeded"), "CSV should be in Succeeded phase")
+		GinkgoLogr.Info("CSV validation passed", "csvName", csv.Definition.Name, "phase", csv.Definition.Status.Phase)
 
 		By("Step 3: Checking Subscription status")
 		sub, err := getOperatorSubscription(getAPIClient(), sriovOpNs)
@@ -87,6 +93,9 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 	})
 
 	It("test_sriov_operator_data_plane_before_removal - Validate data plane operational before removal [Disruptive] [Serial]", func() {
+		By("DATA PLANE VALIDATION - Pre-removal verification")
+		GinkgoLogr.Info("Starting data plane validation", "namespace", sriovOpNs)
+
 		executed := false
 		var testDeviceConfig deviceConfig
 		var testNamespace string
@@ -98,6 +107,7 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 			if result {
 				testDeviceConfig = data
 				executed = true
+				GinkgoLogr.Info("SR-IOV device selected for testing", "device", data.Name, "deviceID", data.DeviceID)
 				break
 			}
 		}
@@ -106,10 +116,10 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 			Skip("No SR-IOV devices available for data plane testing")
 		}
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
-	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespace = "e2e-reinstall-dataplane-" + testDeviceConfig.Name + "-" + timestamp
-	testNetworkName = "reinstall-test-net-" + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
+		timestamp := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespace = "e2e-reinstall-dataplane-" + testDeviceConfig.Name + "-" + timestamp
+		testNetworkName = "reinstall-test-net-" + testDeviceConfig.Name
 
 		// Create namespace for data plane test
 		nsBuilder := namespace.NewBuilder(getAPIClient(), testNamespace)
@@ -118,6 +128,7 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		}
 		_, err := nsBuilder.Create()
 		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
+		GinkgoLogr.Info("Test namespace created", "namespace", testNamespace)
 
 		defer func() {
 			By("Cleaning up data plane test resources")
@@ -133,6 +144,7 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		}()
 
 		By("Step 1: Creating SR-IOV network for data plane test")
+		GinkgoLogr.Info("Creating SR-IOV network", "name", testNetworkName, "resourceName", testDeviceConfig.Name)
 		sriovNetworkTemplate := filepath.Join("testdata", "networking", "sriov", "sriovnetwork-whereabouts-template.yaml")
 		sriovnetwork := sriovNetwork{
 			name:             testNetworkName,
@@ -142,26 +154,28 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 			namespace:        sriovOpNs,
 			spoolchk:         "off",
 			trust:            "on",
-	}
-	sriovnetwork.createSriovNetwork()
+		}
+		sriovnetwork.createSriovNetwork()
+		GinkgoLogr.Info("Equivalent oc command", "command",
+			fmt.Sprintf("oc get sriovnetwork %s -n %s -o yaml", testNetworkName, sriovOpNs))
 
-	By("Step 1.5: Ensuring NAD exists (workaround for OCPBUGS-64886)")
-	// The operator should create this, but due to OCPBUGS-64886 it may fail
-	// This workaround checks if NAD exists, and creates it if needed
-	err = ensureNADExists(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 30*time.Second)
-	Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created as workaround")
-	GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
+		By("Step 1.5: Ensuring NAD exists (workaround for OCPBUGS-64886)")
+		// The operator should create this, but due to OCPBUGS-64886 it may fail
+		// This workaround checks if NAD exists, and creates it if needed
+		err = ensureNADExists(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 30*time.Second)
+		Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created as workaround")
+		GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
 
-	By("Step 2: Creating test pods with SR-IOV interfaces")
-	clientPod := createTestPod("client-dp", testNamespace, testNetworkName, "192.168.10.10/24", "20:04:0f:f1:99:01")
+		By("Step 2: Creating test pods with SR-IOV interfaces")
+		clientPod := createTestPod("client-dp", testNamespace, testNetworkName, "192.168.10.10/24", "20:04:0f:f1:99:01")
 		serverPod := createTestPod("server-dp", testNamespace, testNetworkName, "192.168.10.11/24", "20:04:0f:f1:99:02")
 
 		By("Step 3: Waiting for pods to be ready")
-	err = clientPod.WaitUntilReady(15 * time.Minute)
-	Expect(err).ToNot(HaveOccurred(), "Client pod should be ready")
+		err = clientPod.WaitUntilReady(15 * time.Minute)
+		Expect(err).ToNot(HaveOccurred(), "Client pod should be ready")
 
-	err = serverPod.WaitUntilReady(15 * time.Minute)
-	Expect(err).ToNot(HaveOccurred(), "Server pod should be ready")
+		err = serverPod.WaitUntilReady(15 * time.Minute)
+		Expect(err).ToNot(HaveOccurred(), "Server pod should be ready")
 
 		By("Step 4: Validating SR-IOV interfaces on pods")
 		err = verifyPodSriovInterface(clientPod, testDeviceConfig.Name)
@@ -178,6 +192,9 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 	})
 
 	It("test_sriov_operator_reinstallation_functionality - Validate functionality after reinstallation [Disruptive] [Serial]", func() {
+		By("OPERATOR REINSTALLATION - Full lifecycle test including removal and restoration")
+		GinkgoLogr.Info("Starting operator reinstallation test", "namespace", sriovOpNs)
+
 		var beforeState *SriovClusterState
 		var testDeviceConfig deviceConfig
 		var testNamespace string
@@ -185,61 +202,62 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		var clientPod, serverPod *pod.Builder
 		executed := false
 
-	// ==================== SETUP PHASE ====================
-	By("SETUP: Creating test configuration with SR-IOV workloads")
+		// ==================== SETUP PHASE ====================
+		By("SETUP: Creating test configuration with SR-IOV workloads")
+		GinkgoLogr.Info("Setup phase started - capturing baseline configuration and creating test workloads")
 
-	// IMPORTANT: Capture the current Subscription BEFORE any operator removal
-	// This ensures we can restore with the exact same configuration
-	By("Capturing operator Subscription configuration for later restoration")
-	capturedSubscription, err := getOperatorSubscription(getAPIClient(), sriovOpNs)
-	if err != nil {
-		GinkgoLogr.Info("Warning: Could not capture subscription, will use default restoration", "error", err)
-	} else {
-		GinkgoLogr.Info("Operator Subscription captured successfully", 
-			"name", capturedSubscription.Definition.Name,
-			"channel", capturedSubscription.Definition.Spec.Channel,
-			"source", capturedSubscription.Definition.Spec.CatalogSource)
-	}
-
-	// IMPORTANT: For private registry environments, capture IDMS to ensure operator images can be pulled
-	// without this, operator pods would fail to start with ImagePullBackOff after restoration
-	By("Capturing ImageDigestMirrorSet configuration for private registry support")
-	capturedIDMS, err := captureImageDigestMirrorSets(getAPIClient())
-	if err != nil {
-		GinkgoLogr.Info("No ImageDigestMirrorSet found, test likely uses public registries", "error", err)
-	} else {
-		GinkgoLogr.Info("ImageDigestMirrorSet configuration captured successfully", "count", len(capturedIDMS))
-		for i, idms := range capturedIDMS {
-			GinkgoLogr.Info("IDMS captured", "index", i, "name", idms.Name, "mirrors_count", len(idms.Spec.ImageDigestMirrors))
+		// IMPORTANT: Capture the current Subscription BEFORE any operator removal
+		// This ensures we can restore with the exact same configuration
+		By("Capturing operator Subscription configuration for later restoration")
+		capturedSubscription, err := getOperatorSubscription(getAPIClient(), sriovOpNs)
+		if err != nil {
+			GinkgoLogr.Info("Warning: Could not capture subscription, will use default restoration", "error", err)
+		} else {
+			GinkgoLogr.Info("Operator Subscription captured successfully",
+				"name", capturedSubscription.Definition.Name,
+				"channel", capturedSubscription.Definition.Spec.Channel,
+				"source", capturedSubscription.Definition.Spec.CatalogSource)
 		}
-	}
 
-	// Find a suitable device for testing
-	for _, data := range testData {
-		result := initVF(data.Name, data.DeviceID, data.InterfaceName, data.Vendor, sriovOpNs, vfNum, workerNodes)
-		if result {
-			testDeviceConfig = data
-			executed = true
-			break
+		// IMPORTANT: For private registry environments, capture IDMS to ensure operator images can be pulled
+		// without this, operator pods would fail to start with ImagePullBackOff after restoration
+		By("Capturing ImageDigestMirrorSet configuration for private registry support")
+		capturedIDMS, err := captureImageDigestMirrorSets(getAPIClient())
+		if err != nil {
+			GinkgoLogr.Info("No ImageDigestMirrorSet found, test likely uses public registries", "error", err)
+		} else {
+			GinkgoLogr.Info("ImageDigestMirrorSet configuration captured successfully", "count", len(capturedIDMS))
+			for i, idms := range capturedIDMS {
+				GinkgoLogr.Info("IDMS captured", "index", i, "name", idms.Name, "mirrors_count", len(idms.Spec.ImageDigestMirrors))
+			}
 		}
-	}
 
-	if !executed {
-		Skip("No SR-IOV devices available for reinstallation testing")
-	}
+		// Find a suitable device for testing
+		for _, data := range testData {
+			result := initVF(data.Name, data.DeviceID, data.InterfaceName, data.Vendor, sriovOpNs, vfNum, workerNodes)
+			if result {
+				testDeviceConfig = data
+				executed = true
+				break
+			}
+		}
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
-	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespace = "e2e-reinstall-full-" + testDeviceConfig.Name + "-" + timestamp
-	testNetworkName = "reinstall-full-net-" + testDeviceConfig.Name
+		if !executed {
+			Skip("No SR-IOV devices available for reinstallation testing")
+		}
 
-	// Create namespace
-	nsBuilder := namespace.NewBuilder(getAPIClient(), testNamespace)
-	for key, value := range params.PrivilegedNSLabels {
-		nsBuilder.WithLabel(key, value)
-	}
-	_, err = nsBuilder.Create()
-	Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
+		// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
+		timestamp := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespace = "e2e-reinstall-full-" + testDeviceConfig.Name + "-" + timestamp
+		testNetworkName = "reinstall-full-net-" + testDeviceConfig.Name
+
+		// Create namespace
+		nsBuilder := namespace.NewBuilder(getAPIClient(), testNamespace)
+		for key, value := range params.PrivilegedNSLabels {
+			nsBuilder.WithLabel(key, value)
+		}
+		_, err = nsBuilder.Create()
+		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
 
 		defer func() {
 			By("CLEANUP: Removing all test resources")
@@ -271,24 +289,27 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 			namespace:        sriovOpNs,
 			spoolchk:         "off",
 			trust:            "on",
-	}
-	sriovnetwork.createSriovNetwork()
+		}
+		sriovnetwork.createSriovNetwork()
 
-	// Ensure NAD exists (workaround for OCPBUGS-64886)
-	By("Ensuring NAD exists (workaround for OCPBUGS-64886)")
-	err = ensureNADExists(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 30*time.Second)
-	Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created as workaround")
-	GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
+		// Ensure NAD exists (workaround for OCPBUGS-64886)
+		By("Ensuring NAD exists (workaround for OCPBUGS-64886)")
+		err = ensureNADExists(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 30*time.Second)
+		Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created as workaround")
+		GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
 
-	// Create test pods
-	clientPod = createTestPod("client-full", testNamespace, testNetworkName, "192.168.20.10/24", "20:04:0f:f1:88:01")
+		// Create test pods
+		By("Creating test pods with SR-IOV network attachment")
+		GinkgoLogr.Info("Creating client and server pods", "namespace", testNamespace, "network", testNetworkName)
+		clientPod = createTestPod("client-full", testNamespace, testNetworkName, "192.168.20.10/24", "20:04:0f:f1:88:01")
 		serverPod = createTestPod("server-full", testNamespace, testNetworkName, "192.168.20.11/24", "20:04:0f:f1:88:02")
+		GinkgoLogr.Info("Test pods created", "clientPod", "client-full", "serverPod", "server-full")
 
-	err = clientPod.WaitUntilReady(20 * time.Minute)
-	Expect(err).ToNot(HaveOccurred(), "Client pod should be ready before operator removal")
+		err = clientPod.WaitUntilReady(20 * time.Minute)
+		Expect(err).ToNot(HaveOccurred(), "Client pod should be ready before operator removal")
 
-	err = serverPod.WaitUntilReady(20 * time.Minute)
-	Expect(err).ToNot(HaveOccurred(), "Server pod should be ready before operator removal")
+		err = serverPod.WaitUntilReady(20 * time.Minute)
+		Expect(err).ToNot(HaveOccurred(), "Server pod should be ready before operator removal")
 
 		// Verify initial connectivity
 		err = validateWorkloadConnectivity(clientPod, serverPod, "192.168.20.11")
@@ -349,41 +370,41 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 
 		GinkgoLogr.Info("Phase 1 completed: Operator removed, workloads still operational")
 
-	// ==================== PHASE 2: OPERATOR REINSTALLATION ====================
-	By("PHASE 2: Reinstalling SR-IOV operator via OLM")
+		// ==================== PHASE 2: OPERATOR REINSTALLATION ====================
+		By("PHASE 2: Reinstalling SR-IOV operator via OLM")
 
-	// CRITICAL: Restore IDMS BEFORE operator reinstallation
-	// For private registry environments, IDMS must be in place for operator images to be pulled correctly
-	By("Phase 2.0: Restoring ImageDigestMirrorSet configuration for private registry support")
-	if capturedIDMS != nil && len(capturedIDMS) > 0 {
-		GinkgoLogr.Info("Restoring ImageDigestMirrorSet configuration", "count", len(capturedIDMS))
-		err = restoreImageDigestMirrorSets(getAPIClient(), capturedIDMS)
-		Expect(err).ToNot(HaveOccurred(), "Failed to restore ImageDigestMirrorSet configuration")
-		GinkgoLogr.Info("ImageDigestMirrorSet configuration restored successfully")
-	} else {
-		GinkgoLogr.Info("No IDMS to restore, test uses public registries")
-	}
-
-	By("Phase 2.1: Triggering operator reinstallation using captured Subscription configuration")
-	// Use the subscription we captured BEFORE deletion to ensure exact restoration
-	if capturedSubscription != nil {
-		GinkgoLogr.Info("Restoring operator with captured Subscription configuration", 
-			"name", capturedSubscription.Definition.Name,
-			"channel", capturedSubscription.Definition.Spec.Channel,
-			"source", capturedSubscription.Definition.Spec.CatalogSource)
-		// Update subscription to trigger reinstallation (no-op update)
-		_, err = capturedSubscription.Update()
-		Expect(err).ToNot(HaveOccurred(), "Failed to update captured subscription for reinstallation")
-	} else {
-		GinkgoLogr.Info("Captured Subscription was nil, attempting manual operator restoration")
-		// Try manual restoration if subscription was not captured
-		err = manuallyRestoreOperatorWithCapturedConfig(getAPIClient(), sriovOpNs, nil)
-		if err != nil {
-			GinkgoLogr.Info("Manual restoration attempt failed", "error", err)
-			// Don't skip - fail explicitly so subsequent tests aren't silently affected
-			Fail("CRITICAL: Failed to restore SR-IOV operator - subsequent tests will fail. Manual intervention required.")
+		// CRITICAL: Restore IDMS BEFORE operator reinstallation
+		// For private registry environments, IDMS must be in place for operator images to be pulled correctly
+		By("Phase 2.0: Restoring ImageDigestMirrorSet configuration for private registry support")
+		if capturedIDMS != nil && len(capturedIDMS) > 0 {
+			GinkgoLogr.Info("Restoring ImageDigestMirrorSet configuration", "count", len(capturedIDMS))
+			err = restoreImageDigestMirrorSets(getAPIClient(), capturedIDMS)
+			Expect(err).ToNot(HaveOccurred(), "Failed to restore ImageDigestMirrorSet configuration")
+			GinkgoLogr.Info("ImageDigestMirrorSet configuration restored successfully")
+		} else {
+			GinkgoLogr.Info("No IDMS to restore, test uses public registries")
 		}
-	}
+
+		By("Phase 2.1: Triggering operator reinstallation using captured Subscription configuration")
+		// Use the subscription we captured BEFORE deletion to ensure exact restoration
+		if capturedSubscription != nil {
+			GinkgoLogr.Info("Restoring operator with captured Subscription configuration",
+				"name", capturedSubscription.Definition.Name,
+				"channel", capturedSubscription.Definition.Spec.Channel,
+				"source", capturedSubscription.Definition.Spec.CatalogSource)
+			// Update subscription to trigger reinstallation (no-op update)
+			_, err = capturedSubscription.Update()
+			Expect(err).ToNot(HaveOccurred(), "Failed to update captured subscription for reinstallation")
+		} else {
+			GinkgoLogr.Info("Captured Subscription was nil, attempting manual operator restoration")
+			// Try manual restoration if subscription was not captured
+			err = manuallyRestoreOperatorWithCapturedConfig(getAPIClient(), sriovOpNs, nil)
+			if err != nil {
+				GinkgoLogr.Info("Manual restoration attempt failed", "error", err)
+				// Don't skip - fail explicitly so subsequent tests aren't silently affected
+				Fail("CRITICAL: Failed to restore SR-IOV operator - subsequent tests will fail. Manual intervention required.")
+			}
+		}
 
 		By("Phase 2.2: Waiting for new CSV and operator pods")
 		err = waitForOperatorReinstall(getAPIClient(), sriovOpNs, 10*time.Minute)
@@ -394,22 +415,22 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		}
 		Expect(err).ToNot(HaveOccurred(), "CRITICAL: Operator must reinstall for subsequent tests")
 
-	By("Phase 2.3: Explicitly verifying operator pods are running")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	podList := &corev1.PodList{}
-	err = getAPIClient().Client.List(ctx, podList, &client.ListOptions{Namespace: sriovOpNs})
-	Expect(err).ToNot(HaveOccurred(), "Failed to list operator pods")
-	Expect(len(podList.Items)).To(BeNumerically(">", 0), "CRITICAL: Operator pods must be running after restoration")
-	GinkgoLogr.Info("Operator pods verified running", "count", len(podList.Items))
+		By("Phase 2.3: Explicitly verifying operator pods are running")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		podList := &corev1.PodList{}
+		err = getAPIClient().Client.List(ctx, podList, &client.ListOptions{Namespace: sriovOpNs})
+		Expect(err).ToNot(HaveOccurred(), "Failed to list operator pods")
+		Expect(len(podList.Items)).To(BeNumerically(">", 0), "CRITICAL: Operator pods must be running after restoration")
+		GinkgoLogr.Info("Operator pods verified running", "count", len(podList.Items))
 
-	By("Phase 2.4: Verifying CSV reaches Succeeded phase")
-	csv, err := getOperatorCSV(getAPIClient(), sriovOpNs)
-	Expect(err).ToNot(HaveOccurred(), "CSV should be available after reinstall")
-	Expect(string(csv.Definition.Status.Phase)).To(Equal("Succeeded"), "CSV should be in Succeeded phase")
+		By("Phase 2.4: Verifying CSV reaches Succeeded phase")
+		csv, err := getOperatorCSV(getAPIClient(), sriovOpNs)
+		Expect(err).ToNot(HaveOccurred(), "CSV should be available after reinstall")
+		Expect(string(csv.Definition.Status.Phase)).To(Equal("Succeeded"), "CSV should be in Succeeded phase")
 
-	By("Phase 2.5: Final verification that operator is fully operational")
-	chkSriovOperatorStatus(sriovOpNs)
+		By("Phase 2.5: Final verification that operator is fully operational")
+		chkSriovOperatorStatus(sriovOpNs)
 
 		GinkgoLogr.Info("Phase 2 completed: Operator successfully reinstalled and verified operational")
 
