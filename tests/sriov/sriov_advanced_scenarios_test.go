@@ -31,6 +31,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 			},
 		)
 		Expect(len(workerNodes)).To(BeNumerically(">", 0), "No worker nodes found")
+		GinkgoLogr.Info("Worker nodes discovered", "count", len(workerNodes))
 
 		sriovOpNs = NetConfig.SriovOperatorNamespace
 		testData = getDeviceConfig()
@@ -39,16 +40,21 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		By("Verifying SR-IOV operator is deployed and stable")
 		err := IsSriovDeployed(getAPIClient(), NetConfig)
 		Expect(err).ToNot(HaveOccurred(), "SR-IOV operator is not deployed or not ready")
+		GinkgoLogr.Info("SR-IOV operator verified", "namespace", sriovOpNs)
 
 		By("Waiting for cluster to be stable before starting advanced scenario tests")
 		err = WaitForSriovAndMCPStable(
 			getAPIClient(), 20*time.Minute, 30*time.Second, NetConfig.CnfMcpLabel, sriovOpNs)
 		Expect(err).ToNot(HaveOccurred(), "Cluster is not stable")
+		GinkgoLogr.Info("Cluster is stable and ready for advanced scenarios")
 
-		GinkgoLogr.Info("SR-IOV Advanced Scenarios test suite initialized successfully")
+		GinkgoLogr.Info("SR-IOV Advanced Scenarios test suite initialized successfully", "operator_ns", sriovOpNs, "test_devices", len(testData))
 	})
 
 	It("test_sriov_end_to_end_telco_scenario - Complete telco deployment scenario with SR-IOV [Disruptive] [Serial] [advanced-scenarios]", func() {
+		By("END-TO-END TELCO SCENARIO - Complete CNF deployment with multiple SR-IOV networks")
+		GinkgoLogr.Info("Starting end-to-end telco scenario test")
+
 		executed := false
 		var testDeviceConfig deviceConfig
 
@@ -58,6 +64,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 			if result {
 				testDeviceConfig = data
 				executed = true
+				GinkgoLogr.Info("SR-IOV device selected for telco scenario", "device", data.Name, "deviceID", data.DeviceID)
 				break
 			}
 		}
@@ -68,15 +75,16 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 
 		// ==================== PHASE 1: Setup Telco Network Topology ====================
 		By("PHASE 1: Setting up telco network topology with multiple SR-IOV networks")
+		GinkgoLogr.Info("Phase 1: Creating telco network topology")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
-	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespace := "e2e-telco-" + testDeviceConfig.Name + "-" + timestamp
-	mgmtNetworkName := "telco-mgmt-" + testDeviceConfig.Name
-	userPlaneNetworkName := "telco-userplane-" + testDeviceConfig.Name
-	signalingNetworkName := "telco-signaling-" + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
+		timestamp := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespace := "e2e-telco-" + testDeviceConfig.Name + "-" + timestamp
+		mgmtNetworkName := "telco-mgmt-" + testDeviceConfig.Name
+		userPlaneNetworkName := "telco-userplane-" + testDeviceConfig.Name
+		signalingNetworkName := "telco-signaling-" + testDeviceConfig.Name
 
-	// Create namespace
+		// Create namespace
 		ns := namespace.NewBuilder(getAPIClient(), testNamespace)
 		for key, value := range params.PrivilegedNSLabels {
 			ns.WithLabel(key, value)
@@ -287,6 +295,9 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 	})
 
 	It("test_sriov_multi_feature_integration - SR-IOV integration with multiple CNF features [Disruptive] [Serial] [advanced-scenarios]", func() {
+		By("MULTI-FEATURE INTEGRATION - Testing SR-IOV with multiple CNF features")
+		GinkgoLogr.Info("Starting multi-feature integration test")
+
 		executed := false
 		var testDeviceConfig deviceConfig
 
@@ -296,6 +307,7 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 			if result {
 				testDeviceConfig = data
 				executed = true
+				GinkgoLogr.Info("SR-IOV device selected for multi-feature integration", "device", data.Name, "deviceID", data.DeviceID)
 				break
 			}
 		}
@@ -304,12 +316,13 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 			Skip("No SR-IOV devices available for multi-feature integration testing")
 		}
 
-	// ==================== PHASE 1: SR-IOV with DPDK ====================
-	By("PHASE 1: Testing SR-IOV with DPDK integration")
+		// ==================== PHASE 1: SR-IOV with DPDK ====================
+		By("PHASE 1: Testing SR-IOV with DPDK integration")
+		GinkgoLogr.Info("Phase 1: Testing DPDK integration with SR-IOV")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampDPDK := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceDPDK := "e2e-dpdk-" + testDeviceConfig.Name + "-" + timestampDPDK + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampDPDK := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceDPDK := "e2e-dpdk-" + testDeviceConfig.Name + "-" + timestampDPDK + testDeviceConfig.Name
 		dpdkNetworkName := "dpdk-net-" + testDeviceConfig.Name
 		dpdkPolicyName := "dpdk-policy-" + testDeviceConfig.Name
 
@@ -366,12 +379,12 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		dpdkPod.DeleteAndWait(60 * time.Second)
 		By("PHASE 1 completed: DPDK integration validated")
 
-	// ==================== PHASE 2: Multiple SR-IOV Networks per Pod ====================
-	By("PHASE 2: Testing multiple SR-IOV networks per pod")
+		// ==================== PHASE 2: Multiple SR-IOV Networks per Pod ====================
+		By("PHASE 2: Testing multiple SR-IOV networks per pod")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampMulti := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceMulti := "e2e-multi-net-" + testDeviceConfig.Name + "-" + timestampMulti + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampMulti := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceMulti := "e2e-multi-net-" + testDeviceConfig.Name + "-" + timestampMulti + testDeviceConfig.Name
 		netA := "multi-net-a-" + testDeviceConfig.Name
 		netB := "multi-net-b-" + testDeviceConfig.Name
 		netC := "multi-net-c-" + testDeviceConfig.Name
@@ -463,12 +476,12 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		multiNetPod.DeleteAndWait(60 * time.Second)
 		By("PHASE 2 completed: Multiple SR-IOV networks per pod validated")
 
-	// ==================== PHASE 3: Mixed Networking (SR-IOV + OVN-K) ====================
-	By("PHASE 3: Testing mixed networking with SR-IOV secondary and OVN-K primary")
+		// ==================== PHASE 3: Mixed Networking (SR-IOV + OVN-K) ====================
+		By("PHASE 3: Testing mixed networking with SR-IOV secondary and OVN-K primary")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampMixed := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceMixed := "e2e-mixed-net-" + testDeviceConfig.Name + "-" + timestampMixed + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampMixed := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceMixed := "e2e-mixed-net-" + testDeviceConfig.Name + "-" + timestampMixed + testDeviceConfig.Name
 		mixedNetworkName := "mixed-sriov-" + testDeviceConfig.Name
 
 		// Create namespace
@@ -530,12 +543,12 @@ var _ = Describe("SR-IOV Advanced Scenarios Tests", Ordered, func() {
 		mixedPod2.DeleteAndWait(60 * time.Second)
 		By("PHASE 3 completed: Mixed networking validated")
 
-	// ==================== PHASE 4: Resource Management and Scaling ====================
-	By("PHASE 4: Testing resource management and pod scaling with SR-IOV")
+		// ==================== PHASE 4: Resource Management and Scaling ====================
+		By("PHASE 4: Testing resource management and pod scaling with SR-IOV")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampScale := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceScale := "e2e-scale-" + testDeviceConfig.Name + "-" + timestampScale + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampScale := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceScale := "e2e-scale-" + testDeviceConfig.Name + "-" + timestampScale + testDeviceConfig.Name
 		scaleNetworkName := "scale-net-" + testDeviceConfig.Name
 
 		// Create namespace

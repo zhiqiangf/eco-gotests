@@ -30,6 +30,7 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 			},
 		)
 		Expect(len(workerNodes)).To(BeNumerically(">", 0), "No worker nodes found")
+		GinkgoLogr.Info("Worker nodes discovered", "count", len(workerNodes))
 
 		sriovOpNs = NetConfig.SriovOperatorNamespace
 		testData = getDeviceConfig()
@@ -38,16 +39,21 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 		By("Verifying SR-IOV operator is deployed and stable")
 		err := IsSriovDeployed(getAPIClient(), NetConfig)
 		Expect(err).ToNot(HaveOccurred(), "SR-IOV operator is not deployed or not ready")
+		GinkgoLogr.Info("SR-IOV operator verified", "namespace", sriovOpNs)
 
 		By("Waiting for cluster to be stable before starting bonding tests")
 		err = WaitForSriovAndMCPStable(
 			getAPIClient(), 20*time.Minute, 30*time.Second, NetConfig.CnfMcpLabel, sriovOpNs)
 		Expect(err).ToNot(HaveOccurred(), "Cluster is not stable")
+		GinkgoLogr.Info("Cluster is stable and ready for bonding tests")
 
-		GinkgoLogr.Info("SR-IOV Bonding test suite initialized successfully")
+		GinkgoLogr.Info("SR-IOV Bonding test suite initialized successfully", "operator_ns", sriovOpNs, "test_devices", len(testData))
 	})
 
 	It("test_sriov_bond_ipam_integration - SR-IOV bonding with IP Address Management [Disruptive] [Serial] [bonding]", func() {
+		By("BONDING WITH IPAM - Testing SR-IOV bonded VFs with dynamic IP allocation")
+		GinkgoLogr.Info("Starting bonding with IPAM integration test")
+
 		executed := false
 		var testDeviceConfig deviceConfig
 
@@ -57,6 +63,7 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 			if result {
 				testDeviceConfig = data
 				executed = true
+				GinkgoLogr.Info("SR-IOV device selected for bonding test", "device", data.Name, "deviceID", data.DeviceID)
 				break
 			}
 		}
@@ -65,12 +72,13 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 			Skip("No SR-IOV devices available for bonding with IPAM testing")
 		}
 
-	// ==================== PHASE 1: Bond with Whereabouts IPAM ====================
-	By("PHASE 1: Testing SR-IOV bonding with Whereabouts IPAM")
+		// ==================== PHASE 1: Bond with Whereabouts IPAM ====================
+		By("PHASE 1: Testing SR-IOV bonding with Whereabouts IPAM")
+		GinkgoLogr.Info("Phase 1: Creating bonded SR-IOV networks with Whereabouts IPAM")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampWB := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceWB := "e2e-bond-wb-" + testDeviceConfig.Name + "-" + timestampWB + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampWB := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceWB := "e2e-bond-wb-" + testDeviceConfig.Name + "-" + timestampWB + testDeviceConfig.Name
 		testNetworkNet1 := "bond-net1-wb-" + testDeviceConfig.Name
 		testNetworkNet2 := "bond-net2-wb-" + testDeviceConfig.Name
 		testBondNetworkWB := "bond-wb-" + testDeviceConfig.Name
@@ -183,12 +191,12 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 
 		By("PHASE 1 completed: Whereabouts IPAM bonding validated")
 
-	// ==================== PHASE 2: Bond with Static IPAM ====================
-	By("PHASE 2: Testing SR-IOV bonding with Static IPAM")
+		// ==================== PHASE 2: Bond with Static IPAM ====================
+		By("PHASE 2: Testing SR-IOV bonding with Static IPAM")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampStatic := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceStatic := "e2e-bond-static-" + testDeviceConfig.Name + "-" + timestampStatic + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampStatic := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceStatic := "e2e-bond-static-" + testDeviceConfig.Name + "-" + timestampStatic + testDeviceConfig.Name
 		testNetworkNet1Static := "bond-net1-static-" + testDeviceConfig.Name
 		testNetworkNet2Static := "bond-net2-static-" + testDeviceConfig.Name
 		testBondNetworkStatic := "bond-static-" + testDeviceConfig.Name
@@ -296,6 +304,9 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 	})
 
 	It("test_sriov_bond_mode_operator_level - Different bonding modes from operator perspective [Disruptive] [Serial] [bonding]", func() {
+		By("BONDING MODES - Testing SR-IOV operator-level bonding mode configurations")
+		GinkgoLogr.Info("Starting bonding modes test")
+
 		executed := false
 		var testDeviceConfig deviceConfig
 
@@ -305,6 +316,7 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 			if result {
 				testDeviceConfig = data
 				executed = true
+				GinkgoLogr.Info("SR-IOV device selected for bonding modes test", "device", data.Name, "deviceID", data.DeviceID)
 				break
 			}
 		}
@@ -313,12 +325,13 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 			Skip("No SR-IOV devices available for bonding mode testing")
 		}
 
-	// ==================== PHASE 1: Active-Backup Mode ====================
-	By("PHASE 1: Testing Active-Backup bonding mode (mode 1)")
+		// ==================== PHASE 1: Active-Backup Mode ====================
+		By("PHASE 1: Testing Active-Backup bonding mode (mode 1)")
+		GinkgoLogr.Info("Phase 1: Testing bonding mode 1 (Active-Backup)")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampAB := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceAB := "e2e-bond-ab-" + testDeviceConfig.Name + "-" + timestampAB + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampAB := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceAB := "e2e-bond-ab-" + testDeviceConfig.Name + "-" + timestampAB + testDeviceConfig.Name
 		testNetworkNet1AB := "bond-net1-ab-" + testDeviceConfig.Name
 		testNetworkNet2AB := "bond-net2-ab-" + testDeviceConfig.Name
 		testBondNetworkAB := "bond-ab-" + testDeviceConfig.Name
@@ -402,12 +415,12 @@ var _ = Describe("SR-IOV Bonding Tests", Ordered, func() {
 		testPodAB.DeleteAndWait(60 * time.Second)
 		By("PHASE 1 completed: Active-Backup mode validated")
 
-	// ==================== PHASE 2: 802.3ad/LACP Mode ====================
-	By("PHASE 2: Testing 802.3ad/LACP bonding mode (mode 4)")
+		// ==================== PHASE 2: 802.3ad/LACP Mode ====================
+		By("PHASE 2: Testing 802.3ad/LACP bonding mode (mode 4)")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampLACP := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceLACP := "e2e-bond-lacp-" + testDeviceConfig.Name + "-" + timestampLACP + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampLACP := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceLACP := "e2e-bond-lacp-" + testDeviceConfig.Name + "-" + timestampLACP + testDeviceConfig.Name
 		testNetworkNet1LACP := "bond-net1-lacp-" + testDeviceConfig.Name
 		testNetworkNet2LACP := "bond-net2-lacp-" + testDeviceConfig.Name
 		testBondNetworkLACP := "bond-lacp-" + testDeviceConfig.Name
