@@ -661,8 +661,10 @@ func verifyIPv6Connectivity(clientPod, serverPod *pod.Builder, serverIPv6 string
 
 	var pingOutput bytes.Buffer
 	pingTimeout := 2 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	defer cancel()
 	err = wait.PollUntilContextTimeout(
-		context.TODO(),
+		ctx,
 		5*time.Second,
 		pingTimeout,
 		true,

@@ -676,7 +676,9 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 			GinkgoLogr.Info("Equivalent oc command", "command", fmt.Sprintf("oc patch sriovnetworknodepolicy %s -n %s --type merge -p '{\"spec\":{\"mtu\":%d}}'", data.Name, sriovOpNs, mtuValue))
 
 			// Update the policy using the Kubernetes client
-			err = getAPIClient().Client.Update(context.TODO(), targetPolicy.Definition)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			err = getAPIClient().Client.Update(ctx, targetPolicy.Definition)
 			Expect(err).NotTo(HaveOccurred(), "Failed to update SRIOV policy %s with MTU", data.Name)
 
 			GinkgoLogr.Info("SRIOV policy updated with MTU", "name", data.Name, "mtu", mtuValue)
@@ -835,13 +837,13 @@ var _ = Describe("[sig-networking] SDN sriov-legacy", func() {
 				Expect(podNetAnnotation).To(ContainSubstring("pci-address"), "Network status should contain PCI address")
 				Expect(podNetAnnotation).To(ContainSubstring(pciAddress), "Network status should contain the assigned PCI address")
 
-			sriovTestPod.deleteSriovTestPod()
+				sriovTestPod.deleteSriovTestPod()
 
-		}()
-	}
-	if !executed {
-		Skip("No SR-IOV devices matched the requested configuration")
-	}
-})
+			}()
+		}
+		if !executed {
+			Skip("No SR-IOV devices matched the requested configuration")
+		}
+	})
 
 })
