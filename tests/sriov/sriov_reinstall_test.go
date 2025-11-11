@@ -159,12 +159,13 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		GinkgoLogr.Info("Equivalent oc command", "command",
 			fmt.Sprintf("oc get sriovnetwork %s -n %s -o yaml", testNetworkName, sriovOpNs))
 
-		By("Step 1.5: Ensuring NAD exists (workaround for OCPBUGS-64886)")
-		// The operator should create this, but due to OCPBUGS-64886 it may fail
-		// This workaround checks if NAD exists, and creates it if needed
-		err = ensureNADExists(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 30*time.Second)
-		Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created as workaround")
-		GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
+	By("Step 1.5: Ensuring NAD exists (workaround for OCPBUGS-64886)")
+	// The operator should create this, but due to OCPBUGS-64886 it may fail
+	// This workaround checks if NAD exists, and creates it if needed
+	// Increased timeout to 120s to account for operator reconciliation delays
+	err = ensureNADExists(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 120*time.Second)
+	Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created as workaround")
+	GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
 
 		By("Step 2: Creating test pods with SR-IOV interfaces")
 		clientPod := createTestPod("client-dp", testNamespace, testNetworkName, "192.168.10.10/24", "20:04:0f:f1:99:01")
@@ -292,11 +293,12 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		}
 		sriovnetwork.createSriovNetwork()
 
-		// Ensure NAD exists (workaround for OCPBUGS-64886)
-		By("Ensuring NAD exists (workaround for OCPBUGS-64886)")
-		err = ensureNADExists(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 30*time.Second)
-		Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created as workaround")
-		GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
+	// Ensure NAD exists (workaround for OCPBUGS-64886)
+	By("Ensuring NAD exists (workaround for OCPBUGS-64886)")
+	// Increased timeout to 120s to account for operator reconciliation delays
+	err = ensureNADExists(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 120*time.Second)
+	Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created as workaround")
+	GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
 
 		// Create test pods
 		By("Creating test pods with SR-IOV network attachment")
