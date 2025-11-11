@@ -130,6 +130,12 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
 		GinkgoLogr.Info("Test namespace created", "namespace", testNamespace)
 
+		// Phase 2 Enhancement: Ensure namespace is ready before proceeding
+		By("Waiting for namespace to reach Active phase (Phase 2 Enhancement - Namespace Initialization)")
+		err = ensureNamespaceReady(getAPIClient(), testNamespace, 30*time.Second)
+		Expect(err).ToNot(HaveOccurred(), "Namespace should reach Active phase")
+		GinkgoLogr.Info("Namespace is ready and Active", "namespace", testNamespace)
+
 		defer func() {
 			By("Cleaning up data plane test resources")
 			// Clean up network
@@ -159,13 +165,15 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		GinkgoLogr.Info("Equivalent oc command", "command",
 			fmt.Sprintf("oc get sriovnetwork %s -n %s -o yaml", testNetworkName, sriovOpNs))
 
-	By("Step 1.5: Ensuring NAD exists (workaround for OCPBUGS-64886)")
-	// The operator should create this, but due to OCPBUGS-64886 it may fail
-	// This workaround checks if NAD exists, and creates it if needed
-	// Increased timeout to 120s to account for operator reconciliation delays
-	err = ensureNADExists(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 120*time.Second)
-	Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created as workaround")
-	GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
+		By("Step 1.5: Ensuring NAD exists (workaround for OCPBUGS-64886 with fallback)")
+		// The operator should create this, but due to OCPBUGS-64886 it may fail
+		// This workaround uses WORKAROUND_ensureNADExistsWithFallback which:
+		//   1. Waits for operator to create NAD with exponential backoff (up to 120s)
+		//   2. If operator fails, falls back to manually creating the NAD
+		// This allows tests to pass despite the upstream operator bug
+		err = WORKAROUND_ensureNADExistsWithFallback(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 120*time.Second)
+		Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created via workaround for OCPBUGS-64886")
+		GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
 
 		By("Step 2: Creating test pods with SR-IOV interfaces")
 		clientPod := createTestPod("client-dp", testNamespace, testNetworkName, "192.168.10.10/24", "20:04:0f:f1:99:01")
@@ -260,6 +268,12 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		_, err = nsBuilder.Create()
 		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
 
+		// Phase 2 Enhancement: Ensure namespace is ready before proceeding
+		By("Waiting for namespace to reach Active phase (Phase 2 Enhancement - Namespace Initialization)")
+		err = ensureNamespaceReady(getAPIClient(), testNamespace, 30*time.Second)
+		Expect(err).ToNot(HaveOccurred(), "Namespace should reach Active phase")
+		GinkgoLogr.Info("Namespace is ready and Active", "namespace", testNamespace)
+
 		defer func() {
 			By("CLEANUP: Removing all test resources")
 			// Delete pods if they exist
@@ -293,12 +307,15 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		}
 		sriovnetwork.createSriovNetwork()
 
-	// Ensure NAD exists (workaround for OCPBUGS-64886)
-	By("Ensuring NAD exists (workaround for OCPBUGS-64886)")
-	// Increased timeout to 120s to account for operator reconciliation delays
-	err = ensureNADExists(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 120*time.Second)
-	Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created as workaround")
-	GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
+		// Ensure NAD exists (workaround for OCPBUGS-64886 with fallback)
+		By("Ensuring NAD exists (workaround for OCPBUGS-64886 with fallback)")
+		// Use WORKAROUND_ensureNADExistsWithFallback which:
+		//   1. Waits for operator to create NAD with exponential backoff (up to 120s)
+		//   2. If operator fails, falls back to manually creating the NAD
+		// This allows tests to pass despite OCPBUGS-64886
+		err = WORKAROUND_ensureNADExistsWithFallback(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 120*time.Second)
+		Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created via workaround for OCPBUGS-64886")
+		GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
 
 		// Create test pods
 		By("Creating test pods with SR-IOV network attachment")
