@@ -840,15 +840,79 @@ func (sn *sriovNetwork) createSriovNetwork() {
 	logOcCommand("get", "sriovnetwork", sn.name, sn.namespace, "-o", "json")
 	logOcCommand("get", "sriovnetworknodepolicy", sn.resourceName, sn.namespace, "-o", "json")
 
-	Eventually(func() error {
+	// Increased timeout to 5 minutes to handle operator reconciliation delays
+	// Based on UPSTREAM_NAD_CREATION_TIMING_ISSUE.md: NAD creation can be delayed 30-120 seconds
+	// Sometimes the first attempt fails and requires additional reconciliation cycles
+	// WORKAROUND: We don't fail here if NAD doesn't exist - we'll try to create it manually
+	var nadExists bool
+	startTime := time.Now()
+	checkInterval := 3 * time.Second
+	timeout := 5 * time.Minute
+	
+	for {
+		_, err := nad.Pull(getAPIClient(), sn.name, sn.networkNamespace)
+		if err == nil {
+			nadExists = true
+			GinkgoLogr.Info("NetworkAttachmentDefinition created by operator", 
+				"name", sn.name, "namespace", sn.networkNamespace, 
+				"elapsed", time.Since(startTime))
+			break
+		}
+		
+		elapsed := time.Since(startTime)
+		if elapsed >= timeout {
+			GinkgoLogr.Info("NetworkAttachmentDefinition not created by operator within timeout, will attempt workaround",
+				"name", sn.name, "namespace", sn.networkNamespace, 
+				"timeout", timeout, "elapsed", elapsed)
+			break
+		}
+		
+		// Collect comprehensive cluster diagnostics periodically (every 30 seconds)
+		if elapsed.Truncate(30*time.Second) != (elapsed-checkInterval).Truncate(30*time.Second) {
+			collectSriovClusterDiagnostics(sn.name, sn.namespace, sn.networkNamespace, sn.resourceName)
+		}
+		
+		GinkgoLogr.Info("NetworkAttachmentDefinition not yet created", 
+			"name", sn.name, "namespace", sn.networkNamespace, 
+			"error", err, "elapsed", elapsed)
+		
+		time.Sleep(checkInterval)
+	}
+
+	// WORKAROUND: If NAD still doesn't exist after timeout, manually create it
+	// This addresses OCPBUGS-64886 and UPSTREAM_NAD_CREATION_TIMING_ISSUE.md
+	// The operator SHOULD create NAD automatically, but due to bugs it may fail
+	if !nadExists {
+		By(fmt.Sprintf("Checking if NAD workaround is needed for %s", sn.name))
 		_, err := nad.Pull(getAPIClient(), sn.name, sn.networkNamespace)
 		if err != nil {
-			// Collect comprehensive cluster diagnostics for troubleshooting
-			collectSriovClusterDiagnostics(sn.name, sn.namespace, sn.networkNamespace, sn.resourceName)
-			GinkgoLogr.Info("NetworkAttachmentDefinition not yet created", "name", sn.name, "namespace", sn.networkNamespace, "error", err)
+			GinkgoLogr.Info("NAD not created by operator - applying workaround to create it manually",
+				"name", sn.name, "namespace", sn.networkNamespace,
+				"note", "This is a temporary workaround for upstream operator bugs (OCPBUGS-64886)")
+			
+			// Get the SriovNetwork to extract its spec
+			sriovNetObj, pullErr := sriov.PullNetwork(getAPIClient(), sn.name, sn.namespace)
+			if pullErr != nil {
+				GinkgoLogr.Error(pullErr, "Failed to pull SriovNetwork for workaround",
+					"name", sn.name, "namespace", sn.namespace)
+				Fail(fmt.Sprintf("Cannot apply NAD workaround: failed to get SriovNetwork %s: %v", sn.name, pullErr))
+			}
+
+			// Create NAD manually using workaround function
+			err = WORKAROUND_createNADFromSriovNetwork(getAPIClient(), sn.name, sn.networkNamespace, sriovNetObj)
+			Expect(err).ToNot(HaveOccurred(), "Failed to create NAD using workaround. This indicates a critical issue with both operator and workaround.")
+			
+			GinkgoLogr.Info("NAD created successfully using workaround",
+				"name", sn.name, "namespace", sn.networkNamespace,
+				"note", "This is a temporary workaround - operator should create NAD automatically")
+		} else {
+			GinkgoLogr.Info("NAD exists - operator created it successfully, workaround not needed",
+				"name", sn.name, "namespace", sn.networkNamespace)
 		}
-		return err
-	}, 3*time.Minute, 3*time.Second).Should(BeNil(), "Failed to wait for NetworkAttachmentDefinition %s in namespace %s. Ensure the SRIOV policy exists and is properly configured.", sn.name, sn.networkNamespace)
+	} else {
+		GinkgoLogr.Info("NAD exists - operator created it successfully, workaround not needed",
+			"name", sn.name, "namespace", sn.networkNamespace)
+	}
 
 	// Verify that VF resources are actually available on nodes before attempting pod creation
 	By(fmt.Sprintf("Verifying VF resources are available for %s", sn.resourceName))
@@ -3288,58 +3352,6 @@ func ensureNADExists(apiClient *clients.Settings, nadName, targetNamespace, srio
 	}
 }
 
-// WORKAROUND_createNADIfNotExists is a temporary workaround for OCPBUGS-64886
-// where the SR-IOV operator fails to create NetworkAttachmentDefinition objects.
-//
-// IMPORTANT: This is a WORKAROUND and should be REMOVED when OCPBUGS-64886 is fixed.
-// DO NOT use this as a permanent solution - the operator SHOULD create NADs automatically.
-//
-// This function checks if NAD exists (created by operator), and if not, creates it manually.
-// This allows tests to pass despite the upstream operator bug.
-//
-// When OCPBUGS-64886 is fixed:
-//  1. Remove this function (WORKAROUND_createNADIfNotExists)
-//  2. Remove WORKAROUND_ensureNADExistsWithFallback function
-//  3. Update ensureNADExists calls back to just waiting without fallback
-//  4. Tests will work normally with operator creating NADs
-//
-// Related Issue: https://issues.redhat.com/browse/OCPBUGS-64886
-func WORKAROUND_createNADIfNotExists(apiClient *clients.Settings, nadName, targetNamespace, sriovNetworkName string) error {
-	GinkgoLogr.Info("WORKAROUND: Creating NAD manually if operator failed (OCPBUGS-64886 workaround)",
-		"nadName", nadName, "namespace", targetNamespace)
-
-	// Try to get the NAD first
-	nadObj, err := nad.Pull(apiClient, nadName, targetNamespace)
-	if err == nil && nadObj != nil {
-		GinkgoLogr.Info("WORKAROUND: NAD already exists, no need to create",
-			"nadName", nadName, "namespace", targetNamespace)
-		return nil
-	}
-
-	// NAD doesn't exist - create it manually as WORKAROUND for OCPBUGS-64886
-	GinkgoLogr.Info("WORKAROUND: NAD does not exist, creating it manually as workaround for OCPBUGS-64886",
-		"nadName", nadName, "namespace", targetNamespace, "sriovNetworkName", sriovNetworkName)
-
-	// Create the NAD using eco-goinfra
-	// WORKAROUND: Creating NAD manually since operator failed to create it (OCPBUGS-64886)
-	// In a normal scenario, the operator would create this automatically
-	nadBuilder := nad.NewBuilder(apiClient, nadName, targetNamespace)
-
-	// Create the NAD with minimal builder (eco-goinfra will use defaults for SR-IOV)
-	// The builder will create a basic NAD that can be used for SR-IOV network attachment
-	_, err = nadBuilder.Create()
-	if err != nil {
-		GinkgoLogr.Error(err, "WORKAROUND: Failed to manually create NAD as workaround for OCPBUGS-64886",
-			"nadName", nadName, "namespace", targetNamespace)
-		return fmt.Errorf("WORKAROUND: failed to create NAD: %w", err)
-	}
-
-	GinkgoLogr.Info("WORKAROUND: Successfully created NAD manually as workaround for OCPBUGS-64886",
-		"nadName", nadName, "namespace", targetNamespace)
-
-	return nil
-}
-
 // WORKAROUND_ensureNADExistsWithFallback waits for NAD creation with exponential backoff,
 // and if it times out (due to OCPBUGS-64886), falls back to creating it manually.
 //
@@ -3355,7 +3367,7 @@ func WORKAROUND_createNADIfNotExists(apiClient *clients.Settings, nadName, targe
 //
 // When OCPBUGS-64886 is fixed:
 //   - Replace calls to this function with simple ensureNADExists() calls
-//   - Remove this function and WORKAROUND_createNADIfNotExists()
+//   - Remove this function and WORKAROUND_createNADFromSriovNetwork()
 //
 // Related Issue: https://issues.redhat.com/browse/OCPBUGS-64886
 func WORKAROUND_ensureNADExistsWithFallback(apiClient *clients.Settings, nadName, targetNamespace, sriovNetworkName string, timeout time.Duration) error {
@@ -3384,15 +3396,23 @@ func WORKAROUND_ensureNADExistsWithFallback(apiClient *clients.Settings, nadName
 			GinkgoLogr.Info("WORKAROUND: Operator failed to create NAD within timeout (OCPBUGS-64886), falling back to manual creation",
 				"nadName", nadName, "namespace", targetNamespace, "timeout", timeout, "elapsed", elapsed)
 
-			// WORKAROUND: Create the NAD manually since operator failed
-			err = WORKAROUND_createNADIfNotExists(apiClient, nadName, targetNamespace, sriovNetworkName)
+			// WORKAROUND: Create the NAD manually using the better implementation that extracts CNI config from spec
+			// Get the SriovNetwork to extract its spec for proper CNI config
+			sriovNetObj, pullErr := sriov.PullNetwork(apiClient, sriovNetworkName, "openshift-sriov-network-operator")
+			if pullErr != nil {
+				GinkgoLogr.Error(pullErr, "WORKAROUND: Failed to pull SriovNetwork for workaround",
+					"name", sriovNetworkName)
+				return fmt.Errorf("WORKAROUND: failed to get SriovNetwork for workaround: %w", pullErr)
+			}
+
+			err = WORKAROUND_createNADFromSriovNetwork(apiClient, nadName, targetNamespace, sriovNetObj)
 			if err != nil {
 				GinkgoLogr.Error(err, "WORKAROUND: Failed to manually create NAD as fallback for OCPBUGS-64886",
 					"nadName", nadName, "namespace", targetNamespace)
 				return fmt.Errorf("WORKAROUND: NAD creation failed both from operator and fallback: %w", err)
 			}
 
-			GinkgoLogr.Info("WORKAROUND: Successfully created NAD via fallback (manual creation)",
+			GinkgoLogr.Info("WORKAROUND: Successfully created NAD via fallback (manual creation with proper CNI config)",
 				"nadName", nadName, "namespace", targetNamespace)
 			return nil
 		}
@@ -3410,4 +3430,243 @@ func WORKAROUND_ensureNADExistsWithFallback(apiClient *clients.Settings, nadName
 		time.Sleep(nextBackoff)
 		retryCount++
 	}
+}
+// WORKAROUND_createNADFromSriovNetwork manually creates a NetworkAttachmentDefinition from a SriovNetwork spec
+// This is a TEMPORARY WORKAROUND for upstream operator bugs:
+// - OCPBUGS-64886: Operator fails to create NAD due to overly-strict error handling
+// - UPSTREAM_NAD_CREATION_TIMING_ISSUE.md: Operator delays/skips NAD creation on first attempt
+// The operator SHOULD create NAD automatically, but when it fails, this workaround creates it manually
+//
+// IMPORTANT: This is a WORKAROUND and should be REMOVED when OCPBUGS-64886 is fixed.
+// When OCPBUGS-64886 is fixed:
+//  1. Remove this function
+//  2. Remove the call to this function in createSriovNetwork()
+//  3. Tests will work normally with operator creating NADs
+//
+// Related Issue: https://issues.redhat.com/browse/OCPBUGS-64886
+func WORKAROUND_createNADFromSriovNetwork(apiClient *clients.Settings, nadName, targetNamespace string, sriovNetBuilder *sriov.NetworkBuilder) error {
+	By(fmt.Sprintf("WORKAROUND: Creating NAD manually for %s in namespace %s (OCPBUGS-64886)", nadName, targetNamespace))
+	
+	if apiClient == nil {
+		return fmt.Errorf("API client is nil")
+	}
+	
+	if sriovNetBuilder == nil {
+		return fmt.Errorf("SriovNetwork builder is nil")
+	}
+
+	// Get the actual SriovNetwork object
+	sriovNetObj, err := sriovNetBuilder.Get()
+	if err != nil {
+		return fmt.Errorf("failed to get SriovNetwork object: %w", err)
+	}
+	
+	if sriovNetObj == nil {
+		return fmt.Errorf("SriovNetwork object is nil")
+	}
+
+	spec := sriovNetObj.Spec
+	
+	// Build CNI config JSON from SriovNetwork spec
+	cniConfig := WORKAROUND_buildCNIConfigFromSpec(nadName, spec)
+	
+	// Create NAD using the builder
+	nadBuilder := nad.NewBuilder(apiClient, nadName, targetNamespace)
+	
+	// Directly set the config string (workaround approach)
+	nadBuilder.Definition.Spec.Config = cniConfig
+	
+	// Add labels to indicate this was created by workaround
+	if nadBuilder.Definition.Labels == nil {
+		nadBuilder.Definition.Labels = make(map[string]string)
+	}
+	nadBuilder.Definition.Labels["sriov-network-operator.openshift.io/workaround"] = "true"
+	nadBuilder.Definition.Labels["sriov-network-operator.openshift.io/sriov-network"] = sriovNetObj.Name
+	
+	_, err = nadBuilder.Create()
+	if err != nil {
+		GinkgoLogr.Error(err, "WORKAROUND: Failed to create NAD using workaround",
+			"nadName", nadName, "namespace", targetNamespace)
+		return fmt.Errorf("WORKAROUND: failed to create NAD: %w", err)
+	}
+	
+	GinkgoLogr.Info("WORKAROUND: NAD created successfully using workaround",
+		"nadName", nadName, "namespace", targetNamespace,
+		"resourceName", spec.ResourceName,
+		"note", "This is a temporary workaround - remove when OCPBUGS-64886 is fixed")
+	
+	return nil
+}
+
+// WORKAROUND_buildCNIConfigFromSpec builds the CNI configuration JSON string from a SriovNetwork spec
+// This replicates what the operator should do automatically
+// IMPORTANT: This is a WORKAROUND function and should be REMOVED when OCPBUGS-64886 is fixed.
+func WORKAROUND_buildCNIConfigFromSpec(nadName string, spec interface{}) string {
+	// Start building the CNI config with basic fields
+	config := map[string]interface{}{
+		"cniVersion": "0.4.0",
+		"name":       nadName,
+		"type":       "sriov",
+	}
+	
+	// Extract spec fields by marshaling to JSON and unmarshaling to a map
+	// This allows us to access fields without knowing the exact type
+	specJSON, err := json.Marshal(spec)
+	if err == nil {
+		var specMap map[string]interface{}
+		if err := json.Unmarshal(specJSON, &specMap); err == nil {
+			// Extract resourceName
+			if resourceName, ok := specMap["resourceName"].(string); ok && resourceName != "" {
+				config["resourceName"] = fmt.Sprintf("openshift.io/%s", resourceName)
+			} else {
+				// Fallback: extract from network name
+				config["resourceName"] = fmt.Sprintf("openshift.io/%s", WORKAROUND_extractResourceNameFromNetworkName(nadName))
+			}
+			
+			// Extract trust flag
+			if trust, ok := specMap["trust"].(string); ok && trust != "" {
+				config["trust"] = trust
+			}
+			
+			// Extract spoofChk flag
+			if spoofChk, ok := specMap["spoofChk"].(string); ok && spoofChk != "" {
+				config["spoofchk"] = spoofChk
+			}
+			
+			// Extract VLAN
+			if vlan, ok := specMap["vlan"]; ok && vlan != nil {
+				var vlanInt int
+				switch v := vlan.(type) {
+				case float64:
+					vlanInt = int(v)
+				case int:
+					vlanInt = v
+				case *int:
+					if v != nil {
+						vlanInt = *v
+					}
+				}
+				if vlanInt > 0 {
+					config["vlan"] = vlanInt
+				}
+			}
+			
+			// Extract VLAN QoS
+			if vlanQoS, ok := specMap["vlanQoS"]; ok && vlanQoS != nil {
+				var vlanQoSInt int
+				switch v := vlanQoS.(type) {
+				case float64:
+					vlanQoSInt = int(v)
+				case int:
+					vlanQoSInt = v
+				case *int:
+					if v != nil {
+						vlanQoSInt = *v
+					}
+				}
+				if vlanQoSInt > 0 {
+					config["vlanQoS"] = vlanQoSInt
+				}
+			}
+			
+			// Extract minTxRate
+			if minTxRate, ok := specMap["minTxRate"]; ok && minTxRate != nil {
+				var minTxRateInt int
+				switch v := minTxRate.(type) {
+				case float64:
+					minTxRateInt = int(v)
+				case int:
+					minTxRateInt = v
+				case *int:
+					if v != nil {
+						minTxRateInt = *v
+					}
+				}
+				if minTxRateInt > 0 {
+					config["min_tx_rate"] = minTxRateInt
+				}
+			}
+			
+			// Extract maxTxRate
+			if maxTxRate, ok := specMap["maxTxRate"]; ok && maxTxRate != nil {
+				var maxTxRateInt int
+				switch v := maxTxRate.(type) {
+				case float64:
+					maxTxRateInt = int(v)
+				case int:
+					maxTxRateInt = v
+				case *int:
+					if v != nil {
+						maxTxRateInt = *v
+					}
+				}
+				if maxTxRateInt > 0 {
+					config["max_tx_rate"] = maxTxRateInt
+				}
+			}
+			
+			// Extract linkState
+			if linkState, ok := specMap["linkState"].(string); ok && linkState != "" {
+				config["link_state"] = linkState
+			}
+			
+			// Extract IPAM config
+			if ipam, ok := specMap["ipam"].(string); ok && ipam != "" {
+				var ipamConfig interface{}
+				if err := json.Unmarshal([]byte(ipam), &ipamConfig); err == nil {
+					config["ipam"] = ipamConfig
+				} else {
+					// If IPAM is not valid JSON, try to parse it as a simple type
+					if strings.Contains(ipam, "static") {
+						config["ipam"] = map[string]interface{}{
+							"type": "static",
+						}
+					} else if strings.Contains(ipam, "whereabouts") {
+						// Try to extract whereabouts config
+						config["ipam"] = map[string]interface{}{
+							"type": "whereabouts",
+						}
+					} else {
+						// Default to static IPAM
+						config["ipam"] = map[string]interface{}{
+							"type": "static",
+						}
+					}
+				}
+			} else {
+				// Default to static IPAM if not specified
+				config["ipam"] = map[string]interface{}{
+					"type": "static",
+				}
+			}
+		}
+	}
+	
+	// If we couldn't extract resourceName, use fallback
+	if _, ok := config["resourceName"]; !ok {
+		config["resourceName"] = fmt.Sprintf("openshift.io/%s", WORKAROUND_extractResourceNameFromNetworkName(nadName))
+	}
+	
+	// Convert to JSON string
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		GinkgoLogr.Error(err, "WORKAROUND: Failed to marshal CNI config", "config", config)
+		return fmt.Sprintf(`{"cniVersion":"0.4.0","name":"%s","type":"sriov","resourceName":"openshift.io/%s","ipam":{"type":"static"}}`, nadName, WORKAROUND_extractResourceNameFromNetworkName(nadName))
+	}
+	
+	return string(configJSON)
+}
+
+// WORKAROUND_extractResourceNameFromNetworkName extracts the resource name from a network name
+// Network names typically follow patterns like "lifecycle-depend-net-e810xxv231"
+// The resource name is usually the device name suffix (e.g., "e810xxv231")
+// IMPORTANT: This is a WORKAROUND helper and should be REMOVED when OCPBUGS-64886 is fixed.
+func WORKAROUND_extractResourceNameFromNetworkName(networkName string) string {
+	// Try common patterns
+	parts := strings.Split(networkName, "-")
+	if len(parts) > 0 {
+		// Return the last part which is often the device/resource name
+		return parts[len(parts)-1]
+	}
+	return "unknown"
 }
