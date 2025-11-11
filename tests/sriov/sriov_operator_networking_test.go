@@ -48,12 +48,14 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 	BeforeEach(func() {
 		By("Verifying SR-IOV operator status before test")
 		chkSriovOperatorStatus(sriovOpNs)
+		GinkgoLogr.Info("SR-IOV operator status verified", "namespace", sriovOpNs)
 
 		By("Discovering worker nodes")
 		var err error
 		workerNodes, err = nodes.List(getAPIClient(),
 			metav1.ListOptions{LabelSelector: labels.Set(NetConfig.WorkerLabelMap).String()})
 		Expect(err).ToNot(HaveOccurred(), "Failed to discover worker nodes")
+		GinkgoLogr.Info("Worker nodes discovered", "count", len(workerNodes))
 	})
 
 	AfterEach(func() {
@@ -65,6 +67,9 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 	})
 
 	It("test_sriov_operator_ipv4_functionality - Operator-focused IPv4 networking validation [Disruptive] [Serial]", func() {
+		By("SR-IOV OPERATOR IPv4 NETWORKING - Validating operator-focused IPv4 networking functionality")
+		GinkgoLogr.Info("Starting IPv4 networking functionality test")
+
 		executed := false
 		var testDeviceConfig deviceConfig
 
@@ -74,6 +79,7 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 			if result {
 				testDeviceConfig = data
 				executed = true
+				GinkgoLogr.Info("SR-IOV device selected for IPv4 networking test", "device", data.Name, "deviceID", data.DeviceID)
 				break
 			}
 		}
@@ -82,12 +88,13 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 			Skip("No SR-IOV devices available for IPv4 networking testing")
 		}
 
-	// ==================== PHASE 1: Whereabouts IPAM ====================
-	By("PHASE 1: Testing IPv4 networking with Whereabouts IPAM")
+		// ==================== PHASE 1: Whereabouts IPAM ====================
+		By("PHASE 1: Testing IPv4 networking with Whereabouts IPAM")
+		GinkgoLogr.Info("Phase 1: Testing IPv4 with Whereabouts IPAM")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampWhereabouts := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceWhereabouts := "e2e-ipv4-whereabouts-" + testDeviceConfig.Name + "-" + timestampWhereabouts + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampWhereabouts := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceWhereabouts := "e2e-ipv4-whereabouts-" + testDeviceConfig.Name + "-" + timestampWhereabouts + testDeviceConfig.Name
 		testNetworkWhereabouts := "ipv4-whereabouts-net-" + testDeviceConfig.Name
 
 		// Create namespace for whereabouts test
@@ -153,12 +160,12 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 
 		By("PHASE 1 completed: Whereabouts IPAM IPv4 networking validated")
 
-	// ==================== PHASE 2: Static IPAM ====================
-	By("PHASE 2: Testing IPv4 networking with Static IPAM")
+		// ==================== PHASE 2: Static IPAM ====================
+		By("PHASE 2: Testing IPv4 networking with Static IPAM")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampStatic := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceStatic := "e2e-ipv4-static-" + testDeviceConfig.Name + "-" + timestampStatic + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampStatic := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceStatic := "e2e-ipv4-static-" + testDeviceConfig.Name + "-" + timestampStatic + testDeviceConfig.Name
 		testNetworkStatic := "ipv4-static-net-" + testDeviceConfig.Name
 
 		// Create namespace for static test
@@ -227,12 +234,16 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 	})
 
 	It("test_sriov_operator_ipv6_functionality - Operator-focused IPv6 networking validation [Disruptive] [Serial]", func() {
+		By("SR-IOV OPERATOR IPv6 NETWORKING - Validating operator-focused IPv6 networking functionality")
+		GinkgoLogr.Info("Starting IPv6 networking functionality test")
+
 		// Check IPv6 availability
 		By("Checking IPv6 availability on worker nodes")
 		hasIPv6 := detectIPv6Availability(getAPIClient())
 		if !hasIPv6 {
 			Skip("IPv6 is not enabled on worker nodes - skipping IPv6 networking test")
 		}
+		GinkgoLogr.Info("IPv6 is available on cluster")
 
 		executed := false
 		var testDeviceConfig deviceConfig
@@ -243,6 +254,7 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 			if result {
 				testDeviceConfig = data
 				executed = true
+				GinkgoLogr.Info("SR-IOV device selected for IPv6 networking test", "device", data.Name, "deviceID", data.DeviceID)
 				break
 			}
 		}
@@ -251,12 +263,13 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 			Skip("No SR-IOV devices available for IPv6 networking testing")
 		}
 
-	// ==================== PHASE 1: Whereabouts IPAM (IPv6) ====================
-	By("PHASE 1: Testing IPv6 networking with Whereabouts IPAM")
+		// ==================== PHASE 1: Whereabouts IPAM (IPv6) ====================
+		By("PHASE 1: Testing IPv6 networking with Whereabouts IPAM")
+		GinkgoLogr.Info("Phase 1: Testing IPv6 with Whereabouts IPAM")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampIPv6WB := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceWhereabouts := "e2e-ipv6-whereabouts-" + testDeviceConfig.Name + "-" + timestampIPv6WB + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampIPv6WB := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceWhereabouts := "e2e-ipv6-whereabouts-" + testDeviceConfig.Name + "-" + timestampIPv6WB + testDeviceConfig.Name
 		testNetworkWhereabouts := "ipv6-whereabouts-net-" + testDeviceConfig.Name
 
 		nsWhereabouts := namespace.NewBuilder(getAPIClient(), testNamespaceWhereabouts)
@@ -313,12 +326,12 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 
 		By("PHASE 1 completed: Whereabouts IPAM IPv6 networking validated")
 
-	// ==================== PHASE 2: Static IPAM (IPv6) ====================
-	By("PHASE 2: Testing IPv6 networking with Static IPAM")
+		// ==================== PHASE 2: Static IPAM (IPv6) ====================
+		By("PHASE 2: Testing IPv6 networking with Static IPAM")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampIPv6Static := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceStatic := "e2e-ipv6-static-" + testDeviceConfig.Name + "-" + timestampIPv6Static + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampIPv6Static := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceStatic := "e2e-ipv6-static-" + testDeviceConfig.Name + "-" + timestampIPv6Static + testDeviceConfig.Name
 		testNetworkStatic := "ipv6-static-net-" + testDeviceConfig.Name
 
 		nsStatic := namespace.NewBuilder(getAPIClient(), testNamespaceStatic)
@@ -378,12 +391,16 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 	})
 
 	It("test_sriov_operator_dual_stack_functionality - Operator-focused dual-stack networking validation [Disruptive] [Serial]", func() {
+		By("SR-IOV OPERATOR DUAL-STACK NETWORKING - Validating operator-focused dual-stack networking functionality")
+		GinkgoLogr.Info("Starting dual-stack networking functionality test")
+
 		// Check IPv6 and dual-stack availability
 		By("Checking IPv6/dual-stack availability on worker nodes")
 		hasIPv6 := detectIPv6Availability(getAPIClient())
 		if !hasIPv6 {
 			Skip("IPv6 is not enabled on worker nodes - skipping dual-stack networking test")
 		}
+		GinkgoLogr.Info("Dual-stack is available on cluster")
 
 		executed := false
 		var testDeviceConfig deviceConfig
@@ -394,6 +411,7 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 			if result {
 				testDeviceConfig = data
 				executed = true
+				GinkgoLogr.Info("SR-IOV device selected for dual-stack networking test", "device", data.Name, "deviceID", data.DeviceID)
 				break
 			}
 		}
@@ -402,12 +420,13 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 			Skip("No SR-IOV devices available for dual-stack networking testing")
 		}
 
-	// ==================== PHASE 1: Whereabouts IPAM (Dual-Stack) ====================
-	By("PHASE 1: Testing dual-stack networking with Whereabouts IPAM")
+		// ==================== PHASE 1: Whereabouts IPAM (Dual-Stack) ====================
+		By("PHASE 1: Testing dual-stack networking with Whereabouts IPAM")
+		GinkgoLogr.Info("Phase 1: Testing dual-stack (IPv4+IPv6) with Whereabouts IPAM")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampDualStackWB := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceWhereabouts := "e2e-dualstack-wb-" + testDeviceConfig.Name + "-" + timestampDualStackWB + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampDualStackWB := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceWhereabouts := "e2e-dualstack-wb-" + testDeviceConfig.Name + "-" + timestampDualStackWB + testDeviceConfig.Name
 		testNetworkWhereabouts := "dualstack-wb-net-" + testDeviceConfig.Name
 
 		nsWhereabouts := namespace.NewBuilder(getAPIClient(), testNamespaceWhereabouts)
@@ -465,12 +484,12 @@ var _ = Describe("[sig-networking] SR-IOV Operator Networking", Label("operator-
 
 		By("PHASE 1 completed: Whereabouts IPAM dual-stack networking validated")
 
-	// ==================== PHASE 2: Static IPAM (Dual-Stack) ====================
-	By("PHASE 2: Testing dual-stack networking with Static IPAM")
+		// ==================== PHASE 2: Static IPAM (Dual-Stack) ====================
+		By("PHASE 2: Testing dual-stack networking with Static IPAM")
 
-	// Use timestamp suffix to avoid namespace collision from previous test runs
-	timestampDualStackStatic := fmt.Sprintf("%d", time.Now().Unix())
-	testNamespaceStatic := "e2e-dualstack-static-" + testDeviceConfig.Name + "-" + timestampDualStackStatic + testDeviceConfig.Name
+		// Use timestamp suffix to avoid namespace collision from previous test runs
+		timestampDualStackStatic := fmt.Sprintf("%d", time.Now().Unix())
+		testNamespaceStatic := "e2e-dualstack-static-" + testDeviceConfig.Name + "-" + timestampDualStackStatic + testDeviceConfig.Name
 		testNetworkStatic := "dualstack-static-net-" + testDeviceConfig.Name
 
 		nsStatic := namespace.NewBuilder(getAPIClient(), testNamespaceStatic)
@@ -639,7 +658,7 @@ func verifyIPv6Connectivity(clientPod, serverPod *pod.Builder, serverIPv6 string
 
 	// Test connectivity with ping6
 	ping6Cmd := []string{"ping6", "-c", "3", serverIPv6}
-	
+
 	var pingOutput bytes.Buffer
 	pingTimeout := 2 * time.Minute
 	err = wait.PollUntilContextTimeout(
@@ -800,4 +819,3 @@ func createSriovNetworkDualStackStatic(name, resourceName, namespace, targetNS s
 
 	return name
 }
-
