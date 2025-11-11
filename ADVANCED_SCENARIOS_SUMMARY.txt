@@ -1,0 +1,404 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                                                                            ║
+║     SR-IOV ADVANCED SCENARIOS TEST                                        ║
+║     Physical Connectivity Requirements Summary                            ║
+║                                                                            ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+🎯 QUICK ANSWER: What Physical Connectivity Does Advanced Scenarios Need?
+═══════════════════════════════════════════════════════════════════════════════
+
+SIGNIFICANTLY MORE than basic networking test:
+
+1. 🌐 Multiple SR-IOV Networks (3+)
+   ├─ Management (static IPAM)
+   ├─ User Plane (VLAN 100, MTU 9000)
+   └─ Signaling (VLAN 200)
+
+2. 🏷️  VLAN Tagging Support (2+ VLANs)
+   ├─ VLAN 100 (User Plane)
+   ├─ VLAN 200 (Signaling)
+   ├─ VLAN 10, 20 (Multi-feature)
+   └─ Native/Untagged (Management)
+
+3. 📦 Jumbo Frames (MTU 9000)
+   ├─ User Plane must support 9000
+   ├─ Switch must support 9000
+   └─ End-to-end path must support
+
+4. ⚡ DPDK Support
+   ├─ IOMMU enabled (VT-d or AMD-Vi)
+   ├─ vfio-pci driver
+   └─ DPDK-capable NIC
+
+5. 🔀 Multiple Networks per Pod (3+)
+   ├─ Single pod with 3+ SR-IOV interfaces
+   ├─ Different VLANs per interface
+   └─ All simultaneously functional
+
+6. 📊 High-Speed Networking
+   ├─ iperf3 throughput testing
+   ├─ MTU 9000 throughout
+   └─ Minimal packet loss
+
+
+🏗️  TEST 1: END-TO-END TELCO SCENARIO
+═══════════════════════════════════════════════════════════════════════════════
+
+Network Topology:
+
+         TELCO NETWORK (Production-like)
+                    │
+    ┌───────────────┼───────────────┐
+    │               │               │
+VLAN 100       VLAN 200        Management
+MTU 9000       MTU 1500         MTU 1500
+User Plane     Signaling        Network
+192.168.50     192.168.51       10.10.10
+(VLAN 100)     (VLAN 200)       (Native)
+    │               │               │
+    └───────────────┼───────────────┘
+                    │
+              Physical Switch
+              (VLAN Trunk Port)
+                    │
+            Worker Node PF
+            (Physical Function)
+                    │
+        ┌───────────┼───────────┐
+        │           │           │
+       VF0         VF1         VF2
+        │           │           │
+    ┌───────────────────────────────────┐
+    │  Control Plane Pod                │
+    ├─ eth0 (OVN-K)                     │
+    ├─ net1: 10.10.10.10/24 (Management)
+    └─ net2: 192.168.51.10/24 (Signal) │
+    │         (VLAN 200)                │
+    └───────────────────────────────────┘
+    
+    ┌───────────────────────────────────┐
+    │  User Plane Pod                   │
+    ├─ eth0 (OVN-K)                     │
+    ├─ net1: 10.10.10.11/24 (Management)
+    └─ net2: 192.168.50.10/24 (UserPl)│
+    │         (VLAN 100, MTU 9000)      │
+    └───────────────────────────────────┘
+    
+    ┌───────────────────────────────────┐
+    │  Gateway Pod                      │
+    ├─ eth0 (OVN-K)                     │
+    └─ net1: 192.168.50.11/24 (UserPl)│
+             (VLAN 100, MTU 9000)      │
+    └───────────────────────────────────┘
+
+
+Physical Requirements for Test 1:
+
+✅ Virtual Functions:  6 minimum (2 per pod × 3 pods)
+✅ VLAN Support:       VLAN 100 + VLAN 200 on switch
+✅ VLAN Tagging:       Correctly applied to each interface
+✅ IP Subnets:         3 (10.10.10.0/24, 192.168.50.0/24, 192.168.51.0/24)
+✅ MTU 9000:           User plane network end-to-end
+✅ Throughput:         iperf3 test between pods
+✅ Resilience:         Pod deletion/recreation with VF reallocation
+✅ Carrier Status:     UP on all interfaces
+
+
+Test Phases:
+
+Phase 1: Network Setup (Lines 69-134)
+├─ Create Management Network (10.10.10.0/24, static IPAM)
+├─ Create User Plane Network (192.168.50.0/24, VLAN 100, MTU 9000)
+└─ Create Signaling Network (192.168.51.0/24, VLAN 200)
+
+Phase 2: Pod Deployment (Lines 136-182)
+├─ Deploy Control Plane (2 networks: mgmt + signaling)
+├─ Deploy User Plane (2 networks: mgmt + userplane)
+└─ Deploy Gateway (1 network: userplane)
+
+Phase 3: Validation (Lines 184-244)
+├─ Check interface counts (3+)
+├─ Test management network connectivity
+├─ Test user plane connectivity (VLAN 100, MTU 9000)
+├─ Validate VLAN configuration
+├─ Validate MTU 9000 configuration
+├─ iperf3 throughput test
+└─ Check signaling network
+
+Phase 4: Resilience (Lines 246-286)
+├─ Delete User Plane pod
+├─ Verify other pods maintain connectivity
+├─ Recreate User Plane pod
+└─ Verify recovery and VF reallocation
+
+
+🔬 TEST 2: MULTI-FEATURE INTEGRATION (4 Phases)
+═══════════════════════════════════════════════════════════════════════════════
+
+PHASE 1: DPDK Integration (Lines 307-367)
+─────────────────────────────────────────
+
+What It Tests:
+├─ DPDK VF initialization (vfio-pci driver)
+├─ DPDK pod deployment
+└─ DPDK SR-IOV interface verification
+
+Physical Requirements:
+├─ IOMMU enabled (Intel VT-d or AMD-Vi)
+├─ vfio-pci driver support
+├─ DPDK-capable NIC:
+│  ├─ Intel: 82599ES, X520, E810
+│  ├─ Mellanox: ConnectX-3+
+│  └─ Broadcom: NetXtreme
+├─ 1+ Virtual Functions
+└─ DPDK pod image with required tools
+
+If DPDK Not Supported:
+├─ initDpdkVF() returns false
+├─ Skip("DPDK VF initialization failed")
+└─ Test continues gracefully
+
+
+PHASE 2: Multiple Networks per Pod (Lines 369-464)
+──────────────────────────────────────────────────
+
+What It Tests:
+├─ Single pod with 3 SR-IOV networks
+├─ 4 total interfaces: eth0 + net1 + net2 + net3
+├─ Multiple VLAN tags on different VFs
+└─ Individual IP assignment per interface
+
+Network Configuration:
+┌──────────────────────────────────────────┐
+│ Multi-Network Pod                        │
+├─ eth0 (OVN-K, default route)             │
+├─ net1 (SR-IOV Network A)                 │
+│  └─ VLAN 10, 10.10.10.10/24             │
+├─ net2 (SR-IOV Network B)                 │
+│  └─ VLAN 20, 10.10.20.10/24             │
+└─ net3 (SR-IOV Network C)                 │
+   └─ Native (no VLAN), 10.10.30.10/24    │
+└──────────────────────────────────────────┘
+
+Physical Requirements:
+├─ 3 Virtual Functions minimum
+├─ 3 SR-IOV networks created
+├─ VLAN support (VLAN 10 and VLAN 20)
+├─ 3 separate IP subnets
+├─ All 3 networks routable
+└─ Each interface validates:
+   ├─ Carrier status UP
+   ├─ IP correctly assigned
+   ├─ VLAN tag correctly applied
+
+
+PHASE 3: Mixed Networking (Lines 466-531)
+──────────────────────────────────────────
+
+What It Tests:
+├─ OVN-Kubernetes (primary network)
+├─ SR-IOV (secondary network)
+├─ Default route uses primary
+└─ Secondary can carry data plane traffic
+
+Pod Architecture:
+┌────────────────────────────────────┐
+│ Mixed Networking Pod               │
+├─ eth0: OVN-K (Primary)            │
+│  └─ Default Route, 10.0.0.0/24   │
+└────────────────────────────────────┘
+        │
+        ├─ Primary Traffic
+        │  (control plane via OVN-K)
+        │
+        └─ Secondary Traffic
+           (via SR-IOV net1)
+           10.20.30.0/24
+
+Physical Requirements:
+├─ OVN-Kubernetes working
+├─ SR-IOV network separate
+├─ Different subnets (isolation)
+├─ Carrier status UP on SR-IOV interface
+└─ Both networks simultaneously functional
+
+
+PHASE 4: Scaling and Resource Management (Lines 533-611)
+─────────────────────────────────────────────────────────
+
+What It Tests:
+├─ Create 3 pods with SR-IOV
+├─ Delete 1 pod (VF release)
+├─ Create new pod (VF reallocation)
+└─ Verify resource management works
+
+Pod Scaling:
+Initial State:
+├─ Pod 0: VF 0 allocated
+├─ Pod 1: VF 1 allocated
+└─ Pod 2: VF 2 allocated
+
+After Deletion:
+├─ Pod 0: deleted (VF 0 released)
+├─ Pod 1: still running (VF 1)
+└─ Pod 2: still running (VF 2)
+
+After Recreation:
+├─ Pod 1: still running (VF 1)
+├─ Pod 2: still running (VF 2)
+└─ Pod-new: VF 0 reallocated
+
+Physical Requirements:
+├─ 3 Virtual Functions minimum
+├─ Proper VF cleanup on pod deletion
+├─ VF reallocation for new pods
+├─ Network: 10.30.40.0/24 routable
+└─ All pods able to reach each other
+
+
+📊 COMPARISON: BASIC vs ADVANCED TESTS
+═══════════════════════════════════════════════════════════════════════════════
+
+                          │  Basic Networking  │  Advanced Scenarios
+──────────────────────────┼────────────────────┼───────────────────────
+VF Count Needed           │  2-6               │  8+
+Networks per Pod          │  1                 │  3+
+VLAN Support              │  No                │  Yes (multiple)
+VLAN Count                │  0                 │  2-4
+MTU Size                  │  1500 only         │  1500 + 9000
+DPDK Support              │  No                │  Yes (Phase 1)
+Mixed Networking          │  No                │  Yes (Phase 3)
+Throughput Testing        │  ping/ping6 only   │  iperf3
+Test Duration             │  ~30 min           │  ~60 min
+Complexity Level          │  Basic             │  Advanced/Production
+Real-world Use Case       │  Simple SR-IOV     │  Telco NFV deployment
+Failure Tolerance         │  Graceful          │  Graceful
+
+
+❌ WHAT BLOCKS ADVANCED TESTS
+═══════════════════════════════════════════════════════════════════════════════
+
+Blocker 1: No SR-IOV Hardware
+├─ Result: All tests skip
+├─ Message: "No SR-IOV devices available"
+└─ Fix: Use SR-IOV capable hardware
+
+Blocker 2: Insufficient VFs
+├─ Result: Pod creation fails
+├─ Message: "Pod should be ready" (WaitUntilReady timeout)
+└─ Fix: Configure more VFs (typically easy via software)
+
+Blocker 3: VLAN Not Configured on Switch
+├─ Result: Connectivity tests timeout
+├─ Message: "User plane should reach gateway"
+├─ Symptom: Carrier UP but no packets flow
+└─ Fix: Configure VLAN 100/200 on switch port
+
+Blocker 4: MTU Mismatch
+├─ Result: iperf3 throughput very low
+├─ Message: "MTU validation warning"
+├─ Symptom: Packets fragmented/lost
+└─ Fix: Set switch MTU to 9000, verify end-to-end
+
+Blocker 5: IOMMU Disabled (DPDK)
+├─ Result: DPDK phase skips
+├─ Message: "DPDK VF initialization failed"
+├─ Symptom: Cannot bind VF to vfio-pci
+└─ Fix: Enable VT-d/IOMMU in BIOS
+
+Blocker 6: No Carrier on Interface
+├─ Result: Connectivity tests skip (test passes)
+├─ Message: "Interface has NO-CARRIER, skipping"
+├─ Symptom: Cable unplugged or port down
+└─ Fix: Connect cable, enable switch port
+
+
+🎪 PHYSICAL NETWORK SETUP CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
+
+For End-to-End Telco Scenario:
+
+Cluster:
+  ☐ Kubernetes cluster running
+  ☐ OVN-Kubernetes deployed
+  ☐ SR-IOV operator deployed
+  ☐ SR-IOV CNI plugin deployed
+  ☐ Multus CNI deployed
+
+Hardware:
+  ☐ SR-IOV capable NIC (Intel X520 or Mellanox)
+  ☐ Minimum 6 VFs available
+  ☐ IOMMU enabled (for DPDK)
+  ☐ SR-IOV driver loaded
+
+Physical Network:
+  ☐ Managed switch (VLAN support)
+  ☐ VLAN 100 configured on port
+  ☐ VLAN 200 configured on port
+  ☐ MTU 9000 enabled on port
+  ☐ Port security disabled
+  ☐ Physical cable connected
+  ☐ Switch port UP
+
+IP Networking:
+  ☐ 10.10.10.0/24 subnet routable
+  ☐ 192.168.50.0/24 subnet routable
+  ☐ 192.168.51.0/24 subnet routable
+  ☐ Routing between subnets working
+  ☐ No firewall blocking test traffic
+
+Verification:
+  ☐ ethtool shows carrier UP
+  ☐ ip link show displays VFs
+  ☐ ping between pods works
+  ☐ VLAN tags visible in traffic
+  ☐ MTU 9000 negotiated correctly
+
+
+✅ SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
+
+ADVANCED SCENARIOS TEST REQUIRES:
+
+Must Have:
+  ✅ SR-IOV hardware (6-8+ VFs)
+  ✅ Physical network connection
+  ✅ Switch with VLAN support
+  ✅ Multiple subnets routable
+  ✅ Support for VLAN tagging
+  ✅ Support for MTU 9000 (Jumbo Frames)
+
+For Full Testing:
+  ✅ IOMMU enabled (for DPDK phase)
+  ✅ 3+ SR-IOV networks configured
+  ✅ High-speed network (for iperf3)
+  ✅ Carrier status UP
+  ✅ Switch MTU 9000+ configured
+
+Real-World Scenario:
+  ✅ Telco/NFV deployment pattern
+  ✅ Control/Data plane separation
+  ✅ VLAN isolation
+  ✅ High-performance networking
+
+This is a PRODUCTION-GRADE test suite for enterprise telco deployments.
+
+
+📄 MORE DETAILS
+═════════════════════════════════════════════════════════════════════════════
+
+See: SRIOV_ADVANCED_SCENARIOS_PHYSICAL_REQUIREMENTS.md
+
+This file contains:
+  • Detailed network architecture diagrams
+  • Phase-by-phase breakdown with code references
+  • VLAN and MTU configuration details
+  • DPDK requirements and setup
+  • Multi-network pod configuration
+  • Mixed networking (OVN-K + SR-IOV)
+  • Scaling and resource management
+  • Failure scenarios and recovery
+  • Switch configuration examples
+

@@ -1,0 +1,183 @@
+================================================================================
+                    SR-IOV OPERATOR BUG REPORT ARCHIVE
+                         ARCHIVE MANIFEST
+================================================================================
+
+Archive File: sriov-operator-bug-report.tar.gz
+Size: 17 KB (compressed)
+Created: November 10, 2025
+Format: tar.gz (gzip compressed tarball)
+
+Location: /root/eco-gotests/sriov-operator-bug-report.tar.gz
+
+================================================================================
+                              QUICK REFERENCE
+================================================================================
+
+Archive Contents:
+  - 6 Documentation files (analysis, reports, guides)
+  - 1 Automated test script with monitoring
+  - 5 Test log files with evidence
+  - 2 Configuration files
+  - 1 README.md (complete guide inside archive)
+
+Total Files: 15 items
+Compressed Size: 17 KB
+
+================================================================================
+                           EXTRACTION INSTRUCTIONS
+================================================================================
+
+To Extract the Archive:
+  tar -xzf sriov-operator-bug-report.tar.gz
+
+To View Contents Without Extracting:
+  tar -tzf sriov-operator-bug-report.tar.gz
+
+After Extraction, a directory "sriov-bug-report" will be created with all files.
+
+================================================================================
+                            KEY FILES IN ARCHIVE
+================================================================================
+
+PRIMARY DOCUMENTS (Read First):
+  1. README.md
+     - Quick start guide
+     - File descriptions
+     - How to use the contents
+     - Bug summary
+
+  2. UPSTREAM_BUG_REPORT_FINAL.md
+     - Professional GitHub issue template
+     - Ready to file as-is
+     - Complete root cause analysis
+     - Reproduction steps
+     - Fix recommendations
+
+TECHNICAL ANALYSIS:
+  3. BUGGY_CODE_ANALYSIS.md
+     - Source code location and analysis
+     - Detailed bug explanation
+     - Lifecycle monitoring results
+     - Impact assessment
+
+SUPPORTING DOCUMENTATION:
+  4. SOURCE_CODE_BUG_ANALYSIS_COMPLETE.md
+  5. UPSTREAM_OPERATOR_BUG_ANALYSIS.md
+  6. UPSTREAM_BUG_REPORT_READY.md
+
+REPRODUCTION SCRIPT:
+  7. reproduce_upstream_bug.sh
+     - Automated test with monitoring
+     - 480 lines of code
+     - 20-second detailed monitoring
+     - Ready to run
+
+TEST LOGS & EVIDENCE:
+  8. latest-test-logs/ (Directory)
+     - operator-logs-phase1-pre-restart.log
+     - operator-logs-phase2-post-restart.log
+     - pod-deletion-monitoring.txt (KEY EVIDENCE)
+     - SriovNetwork YAML files
+     - Creation timestamps
+
+================================================================================
+                         WHAT'S INSIDE THE PACKAGE
+================================================================================
+
+Professional Bug Report:
+  ✅ Issue title and description
+  ✅ Root cause analysis
+  ✅ Reproduction steps (automated script)
+  ✅ Exact code location (lines 144-155)
+  ✅ Impact assessment
+  ✅ Recommended fixes with code
+  ✅ Testing guidance
+
+Evidence & Logs:
+  ✅ Operator reconciliation logs
+  ✅ Lifecycle monitoring data (20 checks, 1-second intervals)
+  ✅ Resource status tracking (SriovNetwork, NAD, Pod)
+  ✅ Test configuration files
+  ✅ Timestamps
+
+Analysis & Documentation:
+  ✅ Source code analysis
+  ✅ Execution flow diagrams
+  ✅ Lifecycle behavior analysis
+  ✅ Impact on all network types
+  ✅ How bug was discovered
+
+================================================================================
+                              HOW TO FILE THE BUG
+================================================================================
+
+Step 1: Extract Archive
+  tar -xzf sriov-operator-bug-report.tar.gz
+
+Step 2: Read README
+  cd sriov-bug-report
+  cat README.md
+
+Step 3: Prepare Issue
+  - Read: UPSTREAM_BUG_REPORT_FINAL.md
+  - Copy content for GitHub issue
+
+Step 4: File Issue
+  - Go to: https://github.com/k8snetworkplumbinggroup/sriov-network-operator/issues
+  - Click: "New Issue"
+  - Paste: UPSTREAM_BUG_REPORT_FINAL.md content
+  - Attach: BUGGY_CODE_ANALYSIS.md, reproduce_upstream_bug.sh, pod-deletion-monitoring.txt
+
+================================================================================
+                          ARCHIVE INTEGRITY CHECK
+================================================================================
+
+To verify archive integrity after download:
+  tar -tzf sriov-operator-bug-report.tar.gz > /dev/null 2>&1 && echo "Archive OK" || echo "Archive corrupted"
+
+To verify all files extracted correctly:
+  cd sriov-bug-report
+  ls -la
+  wc -l *.md reproduce_upstream_bug.sh
+
+================================================================================
+                              HISTORY & METADATA
+================================================================================
+
+Archive Created:
+  Date: November 10, 2025
+  Time: 15:36 UTC
+  Location: /tmp/sriov-operator-bug-report.tar.gz
+  Copied to: /root/eco-gotests/sriov-operator-bug-report.tar.gz
+
+Contents Assembled From:
+  - /root/eco-gotests/ (documentation)
+  - /tmp/sriov-bug-logs-20251110-145102/ (latest test logs)
+
+Archive Purpose:
+  Complete package for filing upstream bug report
+  All necessary documentation, evidence, and scripts included
+
+Quality Assurance:
+  ✅ All documentation updated with monitoring insights
+  ✅ All logs collected from latest test run
+  ✅ All scripts tested and working
+  ✅ README created for guidance
+  ✅ Archive verified and compressed
+
+================================================================================
+                              DISTRIBUTION NOTES
+================================================================================
+
+This archive is ready to be:
+  ✅ Emailed to team members
+  ✅ Attached to GitHub issue
+  ✅ Shared with upstream project
+  ✅ Stored in version control
+  ✅ Used as reference documentation
+
+No additional files needed for filing the bug report.
+All required materials are included in this archive.
+
+================================================================================

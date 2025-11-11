@@ -3166,34 +3166,71 @@ func waitForSriovNetworkControllerReady(timeout time.Duration) error {
 			GinkgoLogr.Info("SriovNetwork controller is starting, waiting for first reconciliation...")
 			time.Sleep(5 * time.Second)
 			
-			// Now check again to see if we got reconciliation activity
-			cmd = exec.Command("oc", "logs", "-n", sriovOpNs, 
-				"-l", "app=sriov-network-operator",
-				"--tail=50",
-				"--timestamps=true")
-			output, err = cmd.CombinedOutput()
-			if err == nil {
-				logStr = string(output)
-				// If we see "Reconciling" with sriovnetwork, controller is ready
-				if strings.Contains(logStr, "Reconciling") && strings.Contains(logStr, "SriovNetwork") {
-					GinkgoLogr.Info("SriovNetwork controller is ready and processing events")
-					return nil
-				}
-			}
-			
-			elapsed = time.Since(startTime)
-			if elapsed > 30*time.Second {
-				GinkgoLogr.Warn("SriovNetwork controller started but not processing events yet",
-					"elapsed", elapsed)
-				// This indicates the upstream operator bug - controller started but not responding
-				GinkgoLogr.Error(nil, 
-					"UPSTREAM BUG DETECTED: SriovNetwork controller not responding to events after restart. "+
-					"See UPSTREAM_OPERATOR_BUG_ANALYSIS.md for details")
-				return fmt.Errorf("sriovnetwork controller not responding to events (upstream operator bug)")
+		// Now check again to see if we got reconciliation activity
+		cmd = exec.Command("oc", "logs", "-n", sriovOpNs, 
+			"-l", "app=sriov-network-operator",
+			"--tail=50",
+			"--timestamps=true")
+		output, err = cmd.CombinedOutput()
+		if err == nil {
+			logStr = string(output)
+			// If we see "Reconciling" with sriovnetwork, controller is ready
+			if strings.Contains(logStr, "Reconciling") && strings.Contains(logStr, "SriovNetwork") {
+				GinkgoLogr.Info("SriovNetwork controller is ready and processing events")
+				return nil
 			}
 		}
 		
+		elapsed = time.Since(startTime)
+		if elapsed > 30*time.Second {
+			GinkgoLogr.Info("SriovNetwork controller started but not processing events yet",
+				"elapsed", elapsed)
+			// This indicates the upstream operator bug - controller started but not responding
+			GinkgoLogr.Error(nil, 
+				"UPSTREAM BUG DETECTED: SriovNetwork controller not responding to events after restart. "+
+				"See UPSTREAM_OPERATOR_BUG_ANALYSIS.md for details")
+			return fmt.Errorf("sriovnetwork controller not responding to events (upstream operator bug)")
+		}
+	}
+		
 		time.Sleep(5 * time.Second)
+	}
+}
+
+// ensureNADExists checks if NAD exists with a timeout
+// NOTE: This is a workaround detection function for OCPBUGS-64886
+// The operator SHOULD create NAD, but due to the bug it fails to create it after reconciliation
+// This function logs detailed information about the issue for debugging
+func ensureNADExists(apiClient *clients.Settings, nadName, targetNamespace, sriovNetworkName string, timeout time.Duration) error {
+	GinkgoLogr.Info("Waiting for NAD creation by operator (with workaround monitoring)",
+		"nadName", nadName, "namespace", targetNamespace, "timeout", timeout)
+	
+	startTime := time.Now()
+	checkInterval := 5 * time.Second
+	
+	for {
+		elapsed := time.Since(startTime)
+		if elapsed > timeout {
+			GinkgoLogr.Error(nil, 
+				"OCPBUGS-64886 DETECTED: NAD was not created by operator after timeout. "+
+				"This indicates the SR-IOV operator reconciliation is blocked by overly-strict error handling. "+
+				"See UPSTREAM_OPERATOR_BUG_ANALYSIS.md for details.",
+				"nadName", nadName, "namespace", targetNamespace, "timeout", timeout)
+			return fmt.Errorf("NAD not created within timeout (OCPBUGS-64886): %s/%s", targetNamespace, nadName)
+		}
+		
+		// Check if NAD exists
+		nadObj, err := nad.Pull(apiClient, nadName, targetNamespace)
+		if err == nil && nadObj != nil {
+			GinkgoLogr.Info("NAD exists - operator successfully created it",
+				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed)
+			return nil
+		}
+		
+		GinkgoLogr.Info("NAD not yet created by operator, waiting...",
+			"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed)
+		
+		time.Sleep(checkInterval)
 	}
 }
 

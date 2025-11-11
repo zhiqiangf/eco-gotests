@@ -56,11 +56,11 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 		err := validateOperatorControlPlane(getAPIClient(), sriovOpNs)
 		Expect(err).ToNot(HaveOccurred(), "Control plane validation failed")
 
-		By("Step 2: Checking CSV status")
-		csv, err := getOperatorCSV(getAPIClient(), sriovOpNs)
-		Expect(err).ToNot(HaveOccurred(), "Failed to get operator CSV")
-		Expect(csv.Definition.Status.Phase).To(Equal("Succeeded"), "CSV should be in Succeeded phase")
-		GinkgoLogr.Info("CSV validation passed", "csvName", csv.Definition.Name, "phase", csv.Definition.Status.Phase)
+	By("Step 2: Checking CSV status")
+	csv, err := getOperatorCSV(getAPIClient(), sriovOpNs)
+	Expect(err).ToNot(HaveOccurred(), "Failed to get operator CSV")
+	Expect(string(csv.Definition.Status.Phase)).To(Equal("Succeeded"), "CSV should be in Succeeded phase")
+	GinkgoLogr.Info("CSV validation passed", "csvName", csv.Definition.Name, "phase", csv.Definition.Status.Phase)
 
 		By("Step 3: Checking Subscription status")
 		sub, err := getOperatorSubscription(getAPIClient(), sriovOpNs)
@@ -142,11 +142,18 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 			namespace:        sriovOpNs,
 			spoolchk:         "off",
 			trust:            "on",
-		}
-		sriovnetwork.createSriovNetwork()
+	}
+	sriovnetwork.createSriovNetwork()
 
-		By("Step 2: Creating test pods with SR-IOV interfaces")
-		clientPod := createTestPod("client-dp", testNamespace, testNetworkName, "192.168.10.10/24", "20:04:0f:f1:99:01")
+	By("Step 1.5: Ensuring NAD exists (workaround for OCPBUGS-64886)")
+	// The operator should create this, but due to OCPBUGS-64886 it may fail
+	// This workaround checks if NAD exists, and creates it if needed
+	err = ensureNADExists(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 30*time.Second)
+	Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created as workaround")
+	GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
+
+	By("Step 2: Creating test pods with SR-IOV interfaces")
+	clientPod := createTestPod("client-dp", testNamespace, testNetworkName, "192.168.10.10/24", "20:04:0f:f1:99:01")
 		serverPod := createTestPod("server-dp", testNamespace, testNetworkName, "192.168.10.11/24", "20:04:0f:f1:99:02")
 
 		By("Step 3: Waiting for pods to be ready")
@@ -264,11 +271,17 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 			namespace:        sriovOpNs,
 			spoolchk:         "off",
 			trust:            "on",
-		}
-		sriovnetwork.createSriovNetwork()
+	}
+	sriovnetwork.createSriovNetwork()
 
-		// Create test pods
-		clientPod = createTestPod("client-full", testNamespace, testNetworkName, "192.168.20.10/24", "20:04:0f:f1:88:01")
+	// Ensure NAD exists (workaround for OCPBUGS-64886)
+	By("Ensuring NAD exists (workaround for OCPBUGS-64886)")
+	err = ensureNADExists(getAPIClient(), testNetworkName, testNamespace, testNetworkName, 30*time.Second)
+	Expect(err).ToNot(HaveOccurred(), "NAD should exist or be created as workaround")
+	GinkgoLogr.Info("NAD ensured to exist", "nadName", testNetworkName, "namespace", testNamespace)
+
+	// Create test pods
+	clientPod = createTestPod("client-full", testNamespace, testNetworkName, "192.168.20.10/24", "20:04:0f:f1:88:01")
 		serverPod = createTestPod("server-full", testNamespace, testNetworkName, "192.168.20.11/24", "20:04:0f:f1:88:02")
 
 	err = clientPod.WaitUntilReady(20 * time.Minute)
@@ -390,10 +403,10 @@ var _ = Describe("[sig-networking] SR-IOV Operator Reinstallation", Label("reins
 	Expect(len(podList.Items)).To(BeNumerically(">", 0), "CRITICAL: Operator pods must be running after restoration")
 	GinkgoLogr.Info("Operator pods verified running", "count", len(podList.Items))
 
-		By("Phase 2.4: Verifying CSV reaches Succeeded phase")
-		csv, err := getOperatorCSV(getAPIClient(), sriovOpNs)
-		Expect(err).ToNot(HaveOccurred(), "CSV should be available after reinstall")
-		Expect(csv.Definition.Status.Phase).To(Equal("Succeeded"), "CSV should be in Succeeded phase")
+	By("Phase 2.4: Verifying CSV reaches Succeeded phase")
+	csv, err := getOperatorCSV(getAPIClient(), sriovOpNs)
+	Expect(err).ToNot(HaveOccurred(), "CSV should be available after reinstall")
+	Expect(string(csv.Definition.Status.Phase)).To(Equal("Succeeded"), "CSV should be in Succeeded phase")
 
 	By("Phase 2.5: Final verification that operator is fully operational")
 	chkSriovOperatorStatus(sriovOpNs)

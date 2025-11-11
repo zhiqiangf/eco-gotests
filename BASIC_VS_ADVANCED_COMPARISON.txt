@@ -1,0 +1,460 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                                                                            ║
+║   COMPARISON: BASIC vs ADVANCED SR-IOV TESTS                              ║
+║   Physical Connectivity Requirements Side-by-Side                         ║
+║                                                                            ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+QUICK COMPARISON TABLE
+═══════════════════════════════════════════════════════════════════════════════
+
+Aspect                    │ BASIC TEST              │ ADVANCED TEST
+──────────────────────────┼─────────────────────────┼──────────────────────
+Test File                 │ sriov_networking_test   │ sriov_advanced_scenarios
+Test Count                │ 3 test functions        │ 2 test functions
+Real-world Scenario       │ Simple networking       │ Telco/NFV deployment
+Complexity Level          │ Basic                   │ Advanced/Production
+Duration                  │ ~30 minutes             │ ~60 minutes
+
+
+VIRTUAL FUNCTIONS (VFs)
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC:
+  Minimum Required:  2 VFs (1 per pod)
+  Typical Use:       6-8 VFs for all scenarios
+  Per Test:          2-3 VFs
+  Reuse:             VFs released and reused between tests
+  Complexity:        Simple allocation/deallocation
+
+ADVANCED:
+  Minimum Required:  8+ VFs (3 for telco scenario alone)
+  Typical Use:       16+ VFs recommended
+  Per Test:          6-10 VFs
+  Reuse:             VFs must be released and reallocated precisely
+  Complexity:        Complex with multiple networks per pod
+
+
+NETWORKS CREATED
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC:
+  Test 1: IPv4 Whereabouts
+          - 1 network: ipv4-whereabouts-net-*
+          - IPAM: Whereabouts (automatic IP)
+          - Subnet: 192.168.100.0/24
+          - MTU: 1500 (standard)
+          - VLAN: None
+          - Pods: 2 (client-wb, server-wb)
+
+  Test 2: IPv4 Static
+          - 1 network: ipv4-static-net-*
+          - IPAM: Static (manual IP)
+          - Subnet: 192.168.101.0/24
+          - MTU: 1500 (standard)
+          - VLAN: None
+          - Pods: 2 (client-static, server-static)
+
+  Test 3: IPv6 + Dual-Stack
+          - Similar to IPv4, with IPv6 addresses
+
+
+ADVANCED:
+  Test 1: Telco End-to-End
+          Network 1: Management (Static IPAM)
+          - Name: telco-mgmt-*
+          - IPAM: Static
+          - Subnet: 10.10.10.0/24
+          - MTU: 1500
+          - VLAN: None (native)
+          - Pods: 3 (control-plane, user-plane, gateway)
+
+          Network 2: User Plane (Whereabouts IPAM)
+          - Name: telco-userplane-*
+          - IPAM: Whereabouts
+          - Subnet: 192.168.50.0/24
+          - MTU: 9000 (JUMBO FRAMES!)
+          - VLAN: 100
+          - Feature: High performance
+
+          Network 3: Signaling (Whereabouts IPAM)
+          - Name: telco-signaling-*
+          - IPAM: Whereabouts
+          - Subnet: 192.168.51.0/24
+          - MTU: 1500
+          - VLAN: 200
+          - Feature: Control traffic
+
+  Test 2: Multi-Feature Integration
+          Phase 1: DPDK Network
+          - 1 network with vfio-pci driver
+          - Requires IOMMU support
+
+          Phase 2: Multi-Network Pod
+          - 3 networks on single pod
+          - Network A: VLAN 10, 10.10.10.0/24
+          - Network B: VLAN 20, 10.10.20.0/24
+          - Network C: Native, 10.10.30.0/24
+
+          Phase 3: Mixed Networking
+          - OVN-K (primary)
+          - SR-IOV (secondary), 10.20.30.0/24
+
+          Phase 4: Scaling
+          - 3 pods with repeated allocation/deallocation
+
+
+VLAN SUPPORT
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST:
+  VLAN Support:      NOT USED
+  VLAN Count:        0
+  Configuration:     All networks use native/untagged
+  Switch Config:     Not required
+  Feature Testing:   Not tested
+
+ADVANCED TEST:
+  VLAN Support:      REQUIRED
+  VLAN Count:        4 different VLANs
+                     ├─ VLAN 100 (User Plane)
+                     ├─ VLAN 200 (Signaling)
+                     ├─ VLAN 10 (Multi-net Phase)
+                     └─ VLAN 20 (Multi-net Phase)
+  Configuration:     Each network tagged with specific VLAN
+  Switch Config:     REQUIRED - VLAN trunk port, VLAN 10/20/100/200 active
+  Feature Testing:   validateVLANConfig() verifies VLAN tags
+  Validation:        Checks that interfaces have correct VLAN tags
+
+
+JUMBO FRAMES (MTU)
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST:
+  MTU Support:       1500 only (standard)
+  MTU Variations:    None
+  Jumbo Frames:      Not tested
+  Validation:        No MTU validation needed
+  Performance:       Not a focus
+
+ADVANCED TEST:
+  MTU Support:       1500 AND 9000
+  MTU Variations:    Multiple simultaneously
+                     ├─ Management: 1500
+                     ├─ User Plane: 9000 (REQUIRED)
+                     └─ Signaling: 1500
+  Jumbo Frames:      User plane uses 9000
+  Validation:        validateMTU() verifies MTU 9000
+  Performance:       High-speed data plane
+  Requirements:      ├─ NIC must support MTU 9000
+                     ├─ Switch must support MTU 9000
+                     └─ End-to-end path must support
+
+
+DPDK SUPPORT
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST:
+  DPDK:              NOT USED
+  Driver:            Standard driver (ixgbe, mlx4, etc.)
+  IOMMU:             Not required
+  Testing:           Not tested
+
+ADVANCED TEST:
+  DPDK:              TESTED in Phase 1
+  Driver:            vfio-pci (DPDK driver)
+  IOMMU:             REQUIRED (Intel VT-d or AMD-Vi)
+  Testing:           Complete DPDK integration test
+  Hardware Support:  Intel 82599ES, X520, E810
+                     Mellanox ConnectX-3+
+                     Broadcom NetXtreme
+
+
+THROUGHPUT TESTING
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST:
+  Connectivity:      ping / ping6 only
+  Throughput:        Not measured
+  Tools:             Simple ICMP echo
+  Performance Check: Binary pass/fail (replies received)
+
+ADVANCED TEST:
+  Connectivity:      ping (for control plane)
+  Throughput:        iperf3 on user plane
+  Tools:             iperf3 for performance measurement
+  Performance Check: Actual throughput measured
+                     (typical: >1 Gbps for MTU 9000)
+
+
+PODS AND INTERFACES
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST:
+  Max Pods:          2 per test
+  Interfaces/Pod:    2 (eth0 primary + net1 SR-IOV)
+  Total Interfaces:  2 interfaces per pod
+  Architecture:      Simple: Client ↔ Server
+
+ADVANCED TEST:
+  Max Pods:          3 per telco scenario
+  Interfaces/Pod:    Up to 4 (eth0 + net1 + net2 + net3)
+  Total Interfaces:  Multiple simultaneous on single pod
+  Architecture:      Complex telco deployment
+                     ├─ Control plane (2 interfaces)
+                     ├─ User plane (2 interfaces)
+                     └─ Gateway (1 interface)
+
+
+CONNECTIVITY PATTERNS
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST:
+  Pattern 1 (IPv4):
+    Client (192.168.100.10) ↔ Server (192.168.100.11)
+    └─ Single network path
+
+  Pattern 2 (IPv6):
+    Client (fd00::10) ↔ Server (fd00::11)
+    └─ Single network path
+
+  Pattern 3 (Dual-Stack):
+    Client (IPv4 + IPv6) ↔ Server (IPv4 + IPv6)
+    └─ Same network path, both protocols
+
+ADVANCED TEST:
+  Pattern 1 (Telco):
+    Control ↔ User Plane (Management: 10.10.10.0/24)
+    User Plane ↔ Gateway (User Plane: 192.168.50.0/24, VLAN 100)
+    └─ Multiple network paths, different VLANs
+
+  Pattern 2 (Multi-net Pod):
+    Single pod with 3 networks simultaneously
+    ├─ Network A (VLAN 10, 10.10.10.0/24)
+    ├─ Network B (VLAN 20, 10.10.20.0/24)
+    └─ Network C (Native, 10.10.30.0/24)
+
+  Pattern 3 (Mixed):
+    Primary (OVN-K via eth0) + Secondary (SR-IOV via net1)
+    └─ Hybrid networking model
+
+
+IP SUBNETS REQUIRED
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST:
+  IPv4 Subnets:      3 subnets
+                     ├─ 192.168.100.0/24 (IPv4 WB)
+                     ├─ 192.168.101.0/24 (IPv4 Static)
+                     ├─ 192.168.200.0/24 (Dual-Stack WB)
+                     └─ 192.168.201.0/24 (Dual-Stack Static)
+  
+  IPv6 Subnets:      4 subnets (if IPv6 available)
+                     ├─ fd00:192:168:100::/64
+                     ├─ fd00:192:168:101::/64
+                     ├─ fd00:192:168:200::/64
+                     └─ fd00:192:168:201::/64
+
+ADVANCED TEST:
+  IPv4 Subnets:      5+ subnets
+                     ├─ 10.10.10.0/24 (Management)
+                     ├─ 192.168.50.0/24 (User Plane)
+                     ├─ 192.168.51.0/24 (Signaling)
+                     ├─ 10.10.10.0/24 (DPDK test)
+                     ├─ 10.10.20.0/24 (Multi-net VLAN 10)
+                     ├─ 10.10.30.0/24 (Multi-net VLAN 20)
+                     ├─ 10.10.30.0/24 (Multi-net native)
+                     ├─ 10.20.30.0/24 (Mixed networking)
+                     └─ 10.30.40.0/24 (Scaling)
+
+
+TESTING PHASES/DEPTH
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST:
+  Phase 1: Network creation + pod deployment
+  Phase 2: Wait for pods to be ready
+  Phase 3: Verify SR-IOV interface exists
+  Phase 4: Check carrier status
+  Phase 5: Run connectivity tests (ping)
+  Phase 6: Cleanup
+  Total:   Single-level testing
+
+
+ADVANCED TEST:
+  Telco Scenario:
+    Phase 1: Setup telco network topology
+    Phase 2: Deploy workload simulation
+    Phase 3: Validate connectivity and config
+    Phase 4: Test resilience (pod recovery)
+
+  Multi-Feature:
+    Phase 1: DPDK integration
+    Phase 2: Multiple networks per pod
+    Phase 3: Mixed networking validation
+    Phase 4: Resource management + scaling
+
+  Total:  Multi-level, multi-phase testing
+
+
+GRACEFUL DEGRADATION
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST:
+  No SR-IOV Hardware:      Skip entire test
+  No IPv6 on Network:      Skip IPv6 tests only
+  No Carrier (cable down): Skip ping tests, test still PASSES
+  NAD Creation Failed:     Test FAILS (pods hang)
+
+ADVANCED TEST:
+  No SR-IOV Hardware:      Skip entire suite
+  No VLAN Support:         Connectivity tests FAIL
+  MTU 9000 Not Supported:  iperf3 test shows low throughput
+  DPDK Not Available:      DPDK phase SKIPS, others continue
+  IOMMU Disabled:          DPDK phase SKIPS gracefully
+  No Carrier:              Connectivity tests skip, resilience continues
+
+
+ERROR MESSAGES
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST ERRORS:
+  "No SR-IOV devices available for IPv4 networking testing"
+  "Client pod should be ready" (timeout)
+  "IPv4 connectivity should work with Whereabouts IPAM"
+  "ping test failed: unexpected output"
+
+ADVANCED TEST ERRORS:
+  "No SR-IOV devices available for end-to-end telco scenario testing"
+  "Failed to create user plane network"
+  "Control plane pod should be ready"
+  "User plane should reach gateway via user plane network"
+  "DPDK VF initialization failed"
+  "Pod should have 3 interfaces"
+  "net1 should have correct IP"
+  "User plane pod should be ready"
+
+
+REAL-WORLD USE CASES
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST:
+  ✅ Simple SR-IOV networking
+  ✅ Basic pod-to-pod communication
+  ✅ IPv4 and IPv6 validation
+  ✅ IPAM integration (Whereabouts + Static)
+  ✅ Standard MTU (1500)
+
+ADVANCED TEST:
+  ✅ Telco/NFV deployments
+  ✅ Control plane + Data plane separation
+  ✅ Multi-tier network architecture
+  ✅ High-performance networking (MTU 9000)
+  ✅ VLAN-based isolation
+  ✅ DPDK packet processing
+  ✅ Pod resilience and recovery
+  ✅ Resource scaling
+
+
+HARDWARE REQUIREMENTS
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST - MINIMUM:
+  NIC Type:          Any SR-IOV capable
+  VF Count:          6 minimum
+  IOMMU:             Not required
+  Switch:            Any (no special config needed)
+  MTU:               1500 standard
+  Speed:             1Gbps minimum
+
+BASIC TEST - RECOMMENDED:
+  NIC Type:          Intel X520 or Mellanox ConnectX-5+
+  VF Count:          16+
+  IOMMU:             Optional (for other use cases)
+  Switch:            Managed with basic features
+  MTU:               1500 or higher
+  Speed:             10Gbps+
+
+
+ADVANCED TEST - MINIMUM:
+  NIC Type:          Intel X520 or Mellanox ConnectX-5+
+  VF Count:          8 minimum
+  IOMMU:             REQUIRED (for DPDK)
+  Switch:            Managed with VLAN support
+  MTU:               9000 (required)
+  Speed:             10Gbps minimum
+
+ADVANCED TEST - RECOMMENDED:
+  NIC Type:          Mellanox ConnectX-6+ or Intel E810
+  VF Count:          32+
+  IOMMU:             AMD IOMMU or Intel VT-d
+  Switch:            Advanced (QoS, ACLs, Jumbo support)
+  MTU:               9000+ support
+  Speed:             25Gbps+ recommended
+
+
+TEST DURATION
+──────────────────────────────────────────────────────────────────────────────
+
+BASIC TEST:
+  Per test function:   ~5-10 minutes
+  All 3 tests:         ~20-30 minutes total
+  Timeout per pod:     10 minutes
+  Cleanup:             2-3 minutes
+
+ADVANCED TEST:
+  Test 1 (Telco):      ~25-30 minutes
+  Test 2 (Multi-feat): ~30-40 minutes
+  Both tests:          ~60-70 minutes total
+  Timeout per pod:     10 minutes
+  Cleanup per test:    5 minutes
+
+
+✅ SUMMARY COMPARISON
+═══════════════════════════════════════════════════════════════════════════════
+
+BASIC TEST is for:
+  • Simple SR-IOV validation
+  • Basic pod networking
+  • IPAM mechanisms (Whereabouts/Static)
+  • IPv4/IPv6 dual-stack testing
+  • Quick validation (30 min)
+
+ADVANCED TEST is for:
+  • Production telco deployments
+  • Complex multi-network scenarios
+  • High-performance networking (MTU 9000)
+  • DPDK integration
+  • Enterprise-grade testing (60 min)
+
+
+USE ADVANCED TEST WHEN YOU NEED TO VALIDATE:
+  ✅ Real telco/NFV workloads
+  ✅ VLAN-based network isolation
+  ✅ Jumbo frame support
+  ✅ DPDK integration
+  ✅ Multi-network per pod
+  ✅ Pod resilience with SR-IOV
+  ✅ Resource scaling with VFs
+  ✅ High-speed data path
+
+
+PHYSICAL INFRASTRUCTURE REQUIRED:
+
+Basic Test:
+  ├─ Worker node with SR-IOV NIC
+  ├─ Simple network (can be lab setup)
+  └─ Physical cable connected
+
+Advanced Test:
+  ├─ Worker node with high-performance SR-IOV NIC
+  ├─ Managed switch with VLAN support
+  ├─ IOMMU-capable CPU
+  ├─ Jumbo frame support (MTU 9000)
+  └─ Production-quality network
+
+
+This is the key difference: Basic tests simple networking,
+Advanced tests production-grade telco deployments.
+
