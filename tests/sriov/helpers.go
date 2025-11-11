@@ -3460,8 +3460,13 @@ func WORKAROUND_buildCNIConfigFromSpec(nadName string, spec interface{}) string 
 			}
 
 			// Extract spoofChk flag
+			// Note: spoofChk can be null/empty, but CNI plugin may require it to be explicitly set
+			// Default to "off" if not specified (matches operator behavior when SpoofChkConfigured is false)
 			if spoofChk, ok := specMap["spoofChk"].(string); ok && spoofChk != "" {
 				config["spoofchk"] = spoofChk
+			} else {
+				// Default to "off" if not specified - this may be required by some CNI plugin versions
+				config["spoofchk"] = "off"
 			}
 
 			// Extract VLAN
