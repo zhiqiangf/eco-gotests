@@ -842,7 +842,7 @@ func (sn *sriovNetwork) createSriovNetwork() {
 
 	// WORKAROUND: Use WORKAROUND_ensureNADExistsWithFallback to handle OCPBUGS-64886
 	// This waits for the operator to create NAD, and if it fails, falls back to manual creation
-	err := WORKAROUND_ensureNADExistsWithFallback(getAPIClient(), sn.name, sn.networkNamespace, sn.name, 5*time.Minute)
+	err = WORKAROUND_ensureNADExistsWithFallback(getAPIClient(), sn.name, sn.networkNamespace, sn.name, 5*time.Minute)
 	Expect(err).ToNot(HaveOccurred(), "Failed to ensure NetworkAttachmentDefinition %s exists in namespace %s. This may indicate OCPBUGS-64886.", sn.name, sn.networkNamespace)
 
 	// Verify that VF resources are actually available on nodes before attempting pod creation
@@ -3193,6 +3193,55 @@ func waitForSriovNetworkControllerReady(timeout time.Duration) error {
 		}
 
 		time.Sleep(5 * time.Second)
+	}
+}
+
+// ensureNamespaceReady checks if a namespace is Active and not in Terminating state
+// This is crucial for preventing NAD creation failures due to race conditions
+// IMPORTANT: This function was removed in commit d2039289 but is still needed by tests
+func ensureNamespaceReady(apiClient *clients.Settings, namespaceName string, timeout time.Duration) error {
+	GinkgoLogr.Info("Checking namespace readiness (Phase 2 Enhancement - Namespace Initialization Race Prevention)",
+		"namespace", namespaceName, "timeout", timeout)
+
+	startTime := time.Now()
+	checkInterval := 2 * time.Second
+
+	for {
+		elapsed := time.Since(startTime)
+		if elapsed > timeout {
+			GinkgoLogr.Error(nil,
+				"Namespace did not reach Active phase within timeout - may indicate cluster resource issues",
+				"namespace", namespaceName, "timeout", timeout, "elapsed", elapsed)
+			return fmt.Errorf("namespace %s not ready after %v", namespaceName, timeout)
+		}
+
+		// Try to get namespace
+		nsObj, err := namespace.Pull(apiClient, namespaceName)
+		if err != nil {
+			GinkgoLogr.Info("Namespace not yet available, waiting...",
+				"namespace", namespaceName, "elapsed", elapsed)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// Check if namespace is Active
+		if nsObj.Object.Status.Phase == corev1.NamespaceActive {
+			GinkgoLogr.Info("Namespace is ready and Active",
+				"namespace", namespaceName, "elapsed", elapsed)
+			return nil
+		}
+
+		// Check if namespace is Terminating (should not happen during creation, but check anyway)
+		if nsObj.Object.Status.Phase == corev1.NamespaceTerminating {
+			GinkgoLogr.Error(nil,
+				"Namespace is in Terminating state - cannot proceed",
+				"namespace", namespaceName, "elapsed", elapsed)
+			return fmt.Errorf("namespace %s is in Terminating state", namespaceName)
+		}
+
+		GinkgoLogr.Info("Namespace not yet Active, waiting...",
+			"namespace", namespaceName, "phase", nsObj.Object.Status.Phase, "elapsed", elapsed)
+		time.Sleep(checkInterval)
 	}
 }
 
