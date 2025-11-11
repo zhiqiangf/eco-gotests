@@ -3370,9 +3370,10 @@ func WORKAROUND_ensureNADExistsWithFallback(apiClient *clients.Settings, nadName
 	for {
 		elapsed := time.Since(startTime)
 
-		// Check if NAD exists
+		// Check if NAD exists - try multiple times to ensure it's really there
 		nadObj, err := nad.Pull(apiClient, nadName, targetNamespace)
-		if err == nil && nadObj != nil {
+		if err == nil && nadObj != nil && nadObj.Object != nil && nadObj.Object.Name != "" {
+			// NAD exists and is valid - operator created it successfully
 			GinkgoLogr.Info("WORKAROUND: NAD exists - operator successfully created it",
 				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed, "retries", retryCount)
 			return nil
