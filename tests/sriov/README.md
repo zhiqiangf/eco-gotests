@@ -2,6 +2,8 @@
 
 This directory contains SRIOV tests adapted from the OpenShift tests private repository and additional test suites for SR-IOV operator testing. The tests have been modified to work with the eco-gotests framework and infrastructure.
 
+**✨ New:** All tests now include comprehensive logging with phase markers, structured key-value logging, and equivalent `oc` commands for manual verification. See [Comprehensive Logging](#comprehensive-logging) section below.
+
 ## Test Files
 
 - `sriov_basic_test.go` - Main test file containing the SRIOV basic test cases
@@ -603,6 +605,204 @@ export SRIOV_STABILITY_TIMEOUT=1800  # 30 minutes (in seconds)
 export SRIOV_STABILITY_INTERVAL=30   # Poll interval in seconds
 ```
 
+## Comprehensive Logging
+
+### Logging Features
+
+All SR-IOV tests now include professional-grade logging with:
+
+#### 1. **Phase Markers** (`By()` statements)
+- Clear test flow markers at each major phase
+- Hierarchical organization (test → phases → steps)
+- Example output:
+  ```
+  By Step: CONTROL PLANE VALIDATION - Pre-removal verification
+  By Step: PHASE 1: Removing SR-IOV operator via OLM
+  By Step: Phase 1.1: Deleting CSV
+  ```
+
+#### 2. **Structured Logging** (`GinkgoLogr.Info()`)
+- Key-value pair logging for machine parsing
+- Contextual information for each operation
+- Examples:
+  ```
+  [INFO] SR-IOV operator status verified namespace=openshift-sriov-network-operator
+  [INFO] Worker nodes discovered count=7
+  [INFO] SR-IOV device selected for testing device=cx7anl244 deviceID=1021
+  [INFO] Test namespace created namespace=e2e-reinstall-full-cx7anl244-1731338455
+  ```
+
+#### 3. **Manual Verification Commands**
+- Equivalent `oc` commands logged for each major operation
+- Example:
+  ```
+  [INFO] Equivalent oc command command=oc get sriovnetwork test-net -n openshift-sriov-network-operator -o yaml
+  ```
+
+#### 4. **Resource Operation Tracking**
+- All CRUD operations logged with details
+- Configuration changes tracked
+- Error context logged
+
+### Log Output Examples
+
+#### IPv4 Network Test
+```
+By Step: SR-IOV OPERATOR IPv4 NETWORKING - Validating operator-focused IPv4 networking functionality
+[INFO] Starting IPv4 networking functionality test
+By Step: PHASE 1: Testing IPv4 networking with Whereabouts IPAM
+[INFO] Phase 1: Testing IPv4 with Whereabouts IPAM
+[INFO] SR-IOV device selected for IPv4 networking test device=cx7anl244 deviceID=1021
+[INFO] Creating SR-IOV network name=ipv4-whereabouts-net-cx7anl244 resourceName=cx7anl244
+[INFO] Equivalent oc command command=oc get sriovnetwork ipv4-whereabouts-net-cx7anl244 -n openshift-sriov-network-operator -o yaml
+[INFO] Creating client and server pods namespace=e2e-ipv4-whereabouts-cx7anl244-1731338455 network=ipv4-whereabouts-net-cx7anl244
+[INFO] Test pods created clientPod=client-wb serverPod=server-wb
+[INFO] Testing connectivity between pods source=client-wb dest=server-wb
+```
+
+#### Reinstallation Test
+```
+By Step: OPERATOR REINSTALLATION - Full lifecycle test including removal and restoration
+[INFO] Starting operator reinstallation test namespace=openshift-sriov-network-operator
+By Step: SETUP: Creating test configuration with SR-IOV workloads
+[INFO] Setup phase started - capturing baseline configuration and creating test workloads
+[INFO] Worker nodes discovered count=7
+[INFO] Operator Subscription captured successfully name=sriov-network-operator channel=stable source=qe-app-registry
+By Step: PHASE 1: Removing SR-IOV operator via OLM
+[INFO] CSV deletion initiated csv=sriov-network-operator.v999.0.0
+By Step: PHASE 2: Restoring SR-IOV operator
+[INFO] Operator successfully reinstalled and verified operational
+```
+
+### Monitoring Tests
+
+#### Watch Log Output
+```bash
+tail -f /tmp/full_test_run_*.log
+```
+
+#### View Test Progress (Phase Markers Only)
+```bash
+grep "By Step:" /tmp/full_test_run_*.log
+```
+
+#### View All Info Logs
+```bash
+grep "\[INFO\]" /tmp/full_test_run_*.log
+```
+
+#### Find Failed Tests
+```bash
+grep "\[FAILED\]" /tmp/full_test_run_*.log
+```
+
+#### Extract Equivalent OC Commands
+```bash
+grep "Equivalent oc command" /tmp/full_test_run_*.log
+```
+
+### Logging Integration
+
+The logging system is integrated throughout the test lifecycle:
+
+1. **Test Initialization** - Logs environment setup and readiness checks
+2. **Phase Entry** - Phase markers and descriptive logging at phase boundaries
+3. **Resource Operations** - All resource CRUD operations logged with context
+4. **Status Checks** - Configuration verification logged
+5. **Error Handling** - Errors logged with surrounding context
+6. **Cleanup Operations** - Resource cleanup tracked and logged
+
+### Benefits
+
+✅ **Better Observability** - Clear visibility into test execution flow  
+✅ **Faster Troubleshooting** - Contextual information aids debugging  
+✅ **Automated Analysis** - Structured logs can be parsed by automation  
+✅ **Manual Verification** - Equivalent `oc` commands enable manual testing  
+✅ **Documentation** - Logs serve as test execution documentation  
+
+## Tools and Resources
+
+### Cluster Health Check Script
+
+A comprehensive cluster health verification script is available to ensure the SR-IOV test environment is ready:
+
+```bash
+# Basic health check
+./cluster_health_check.sh
+
+# Verbose diagnostics
+./cluster_health_check.sh --verbose
+
+# JSON output (for automation)
+./cluster_health_check.sh --output json
+
+# HTML report
+./cluster_health_check.sh --output html > cluster_health_report.html
+```
+
+**Features:**
+- 11 comprehensive health checks
+- Checks SR-IOV operator, Multus CNI, OLM, node status, and more
+- Multiple output formats (text, JSON, HTML)
+- Pass/fail/warning indicators
+- Exit codes for CI/CD integration
+
+See `CLUSTER_HEALTH_CHECK_USAGE.md` for detailed documentation.
+
+### Running Full Test Suite
+
+To run the complete SR-IOV test suite with logging and monitoring:
+
+```bash
+cd /root/eco-gotests && \
+source ~/newlogin.sh 2>/dev/null && \
+export GOTOOLCHAIN=auto && \
+export SRIOV_DEVICES="cx7anl244:1021:15b3:ens2f0np0,cx6dxanl244:a2d6:15b3:ens7f0np0" && \
+timeout 3600 $(go env GOPATH)/bin/ginkgo -v ./tests/sriov/ 2>&1 | tee /tmp/full_test_run_$(date +%s).log
+```
+
+Or use tmux for background execution:
+
+```bash
+# Start tmux session
+tmux new-session -s sriov-tests
+
+# Paste the command above and press Enter
+# Detach with: Ctrl+B then D
+# Reattach later with: tmux attach-session -t sriov-tests
+```
+
+See `FULL_TEST_EXECUTION_QUICK_REFERENCE.md` for complete guide.
+
+### Upstream Bug Reproduction
+
+To reproduce and report the identified upstream SR-IOV operator bug (OCPBUGS-64886):
+
+```bash
+./reproduce_upstream_bug.sh
+```
+
+This script:
+- Reproduces the NAD creation bug consistently
+- Collects comprehensive logs
+- Monitors resource lifecycle
+- Generates bug report documentation
+
+See `UPSTREAM_BUG_REPORT_FINAL.md` for details.
+
+### Documentation Resources
+
+**In this directory:**
+- `README.md` - This file, comprehensive test documentation
+
+**In project root (`/root/eco-gotests/`):**
+- `FULL_TEST_EXECUTION_QUICK_REFERENCE.md` - Quick command reference
+- `CLUSTER_HEALTH_CHECK_USAGE.md` - Health check guide
+- `LOGGING_IMPLEMENTATION_COMPLETE.md` - Logging feature details
+- `UPSTREAM_BUG_REPORT_FINAL.md` - Bug report documentation
+- `reproduce_upstream_bug.sh` - Bug reproduction script
+- `cluster_health_check.sh` - Health verification script
+
 ## Notes
 
 - Tests are marked as `[Disruptive]` and `[Serial]` as they modify cluster networking configuration and must run sequentially
@@ -610,3 +810,4 @@ export SRIOV_STABILITY_INTERVAL=30   # Poll interval in seconds
 - Tests clean up resources after completion
 - DPDK tests require specific hardware support and may be skipped on unsupported platforms
 - Comprehensive stability checks prevent test flakiness from races with operator reconciliation
+- All tests now include comprehensive logging for better observability and troubleshooting
