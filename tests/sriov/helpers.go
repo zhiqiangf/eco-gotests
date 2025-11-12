@@ -4314,11 +4314,12 @@ func WORKAROUND_extractResourceNameFromNetworkName(networkName string) string {
 // - This resolves false-positive timeouts on busy clusters
 //
 // Migration from old strict checks:
-//   ❌ Check 1-6: NAD object, nil checks, annotations
-//   ❌ Check 7-9: CNI config structure, resourceName field
-//   ✅ New: Single check - NAD.Pull() succeeds = NAD exists and is valid
+//
+//	❌ Check 1-6: NAD object, nil checks, annotations
+//	❌ Check 7-9: CNI config structure, resourceName field
+//	✅ New: Single check - NAD.Pull() succeeds = NAD exists and is valid
 func WORKAROUND_verifyNADVisible(apiClient *clients.Settings, nadName, targetNamespace, expectedResourceName string) error {
-	GinkgoLogr.Info("WORKAROUND: Verifying NAD is visible (simplified check)",
+	GinkgoLogr.Info("WORKAROUND: Verifying NAD is visible (actual existence check)",
 		"nadName", nadName, "namespace", targetNamespace, "expectedResourceName", expectedResourceName)
 
 	// Wait up to 30 seconds for NAD to be visible in API
@@ -4334,29 +4335,51 @@ func WORKAROUND_verifyNADVisible(apiClient *clients.Settings, nadName, targetNam
 			return fmt.Errorf("NAD visibility timeout: NAD %s/%s not available in API server after %v", targetNamespace, nadName, maxWait)
 		}
 
-		// Simple check: Can we pull the NAD from the API?
-		// If nadObj exists and can be unmarshaled, it's valid.
+		// CRITICAL FIX: Actually verify the NAD exists in the cluster!
+		// Previous implementation just checked if a builder object could be created (not if it exists!)
+		// Now we verify it actually exists using Exists() method
 		nadObj, err := nad.Pull(apiClient, nadName, targetNamespace)
 		if err != nil {
-			GinkgoLogr.Info("WORKAROUND: NAD not yet visible in API, retrying...",
+			GinkgoLogr.Info("WORKAROUND: NAD pull failed (doesn't exist yet), retrying...",
 				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed, "error", err)
 			time.Sleep(checkInterval)
 			continue
 		}
 
-		if nadObj == nil || nadObj.Object == nil {
-			GinkgoLogr.Info("WORKAROUND: NAD object is nil, retrying...",
+		if nadObj == nil {
+			GinkgoLogr.Info("WORKAROUND: NAD pull returned nil, retrying...",
 				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed)
 			time.Sleep(checkInterval)
 			continue
 		}
 
-		// NAD exists and is accessible!
-		// Trust that if it was created, it has valid structure
-		GinkgoLogr.Info("WORKAROUND: NAD is visible and accessible in API server",
+		// CRITICAL: Check if NAD actually exists in the cluster!
+		// builder.Exists() returns true only if resource exists in cluster
+		if !nadObj.Exists() {
+			GinkgoLogr.Info("WORKAROUND: NAD builder exists but resource doesn't exist in cluster yet, retrying...",
+				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// Verify the NAD has a valid name and object reference
+		if nadObj.Object == nil || nadObj.Object.Name != nadName {
+			GinkgoLogr.Info("WORKAROUND: NAD object invalid (name mismatch or nil), retrying...",
+				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed,
+				"actualName", func() string {
+					if nadObj.Object != nil {
+						return nadObj.Object.Name
+					}
+					return "nil"
+				}())
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// NAD truly exists and is accessible!
+		GinkgoLogr.Info("WORKAROUND: NAD verified to exist in cluster (Exists() returned true)",
 			"nadName", nadName, "namespace", targetNamespace,
-			"resourceName", expectedResourceName, "elapsed", elapsed,
-			"note", "Simplified check - relies on Kubernetes API validation")
+			"resourceName", expectedResourceName, "elapsed", elapsed)
 		return nil
 	}
 }
