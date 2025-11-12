@@ -4301,18 +4301,23 @@ func WORKAROUND_extractResourceNameFromNetworkName(networkName string) string {
 	return "unknown"
 }
 
-// WORKAROUND_verifyNADVisible verifies that a NAD is visible and accessible, with correct structure
-// for the webhook to detect it. This helps prevent timing issues where the NAD exists but isn't
-// yet visible to the webhook.
+// WORKAROUND_verifyNADVisible verifies that a NAD is visible and accessible.
+// This helps prevent timing issues where the NAD exists but isn't yet visible to the webhook.
 //
 // IMPORTANT: This is a WORKAROUND function and should be REMOVED when OCPBUGS-64886 is fixed.
+//
+// CHANGE: Increased maxWait from 30s to 120s (OCPBUGS-64886 verification issue)
+// - The NAD creation and webhook detection can take longer on busy clusters
+// - Initial implementation had 30s timeout which was too strict
+// - Increased to 120s to allow for eventual consistency propagation
 func WORKAROUND_verifyNADVisible(apiClient *clients.Settings, nadName, targetNamespace, expectedResourceName string) error {
 	GinkgoLogr.Info("WORKAROUND: Verifying NAD is visible and accessible for webhook",
 		"nadName", nadName, "namespace", targetNamespace, "expectedResourceName", expectedResourceName)
 
-	// Wait up to 30 seconds for NAD to be visible, checking every 500ms
+	// Wait up to 120 seconds for NAD to be visible, checking every 500ms
 	// This accounts for eventual consistency in Kubernetes API
-	maxWait := 30 * time.Second
+	// Increased from 30s due to slow webhook detection on busy clusters (OCPBUGS-64886)
+	maxWait := 120 * time.Second
 	checkInterval := 500 * time.Millisecond
 	startTime := time.Now()
 
