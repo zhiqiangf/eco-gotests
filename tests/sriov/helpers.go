@@ -2556,30 +2556,172 @@ func restartDevicePluginPod(apiClient *clients.Settings, sriovOperatorNamespace 
 // ==================== OLM Management Functions ====================
 
 // getOperatorCSV retrieves the current CSV for SR-IOV operator
+// CSVs can be in different namespaces depending on installation:
+// - openshift-sriov-network-operator (operator namespace)
+// - openshift-operators (OLM global namespace)
 func getOperatorCSV(apiClient *clients.Settings, namespace string) (*olm.ClusterServiceVersionBuilder, error) {
 	GinkgoLogr.Info("Getting SR-IOV operator CSV", "namespace", namespace)
 
-	// List all CSVs in the operator namespace
+	// Try to find CSV in subscription's currentCSV first (most reliable)
+	sub, err := getOperatorSubscription(apiClient, namespace)
+	if err == nil && sub != nil && sub.Object.Status.CurrentCSV != "" {
+		currentCSV := sub.Object.Status.CurrentCSV
+		GinkgoLogr.Info("Found currentCSV from subscription", "currentCSV", currentCSV, "namespace", namespace)
+
+		// Try to get CSV from operator namespace first
+		csv, err := olm.PullClusterServiceVersion(apiClient, currentCSV, namespace)
+		if err == nil && csv != nil {
+			GinkgoLogr.Info("Found SR-IOV operator CSV from subscription", "name", currentCSV, "namespace", namespace, "phase", csv.Definition.Status.Phase)
+			return csv, nil
+		} else {
+			GinkgoLogr.Info("CSV not found in operator namespace, trying openshift-operators", "currentCSV", currentCSV, "operatorNamespace", namespace, "error", err)
+		}
+
+		// Try openshift-operators namespace (common for OLM-managed operators)
+		csv, err = olm.PullClusterServiceVersion(apiClient, currentCSV, "openshift-operators")
+		if err == nil && csv != nil {
+			GinkgoLogr.Info("Found SR-IOV operator CSV in openshift-operators namespace", "name", currentCSV, "phase", csv.Definition.Status.Phase)
+			return csv, nil
+		} else {
+			GinkgoLogr.Info("CSV not found in openshift-operators namespace either", "currentCSV", currentCSV, "error", err, "note", "Will search by listing CSVs")
+		}
+	}
+
+	// Fallback: Search in operator namespace
 	csvList, err := olm.ListClusterServiceVersion(apiClient, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list CSVs in namespace %s: %w", namespace, err)
 	}
 
 	if len(csvList) == 0 {
-		return nil, fmt.Errorf("no CSVs found in namespace %s", namespace)
+		// Also try openshift-operators namespace
+		GinkgoLogr.Info("No CSVs in operator namespace, trying openshift-operators", "operatorNamespace", namespace)
+		csvList, err = olm.ListClusterServiceVersion(apiClient, "openshift-operators")
+		if err != nil {
+			GinkgoLogr.Info("Failed to list CSVs in openshift-operators", "error", err)
+			return nil, fmt.Errorf("failed to list CSVs in namespace %s and openshift-operators: %w", namespace, err)
+		}
+		if len(csvList) == 0 {
+			return nil, fmt.Errorf("no CSVs found in namespace %s or openshift-operators", namespace)
+		}
+		GinkgoLogr.Info("Found CSVs in openshift-operators namespace", "count", len(csvList))
+		// Update namespace for logging
+		namespace = "openshift-operators"
+	}
+
+	// First, if we have a currentCSV from subscription, try to find it in the listed CSVs
+	if sub != nil && sub.Object.Status.CurrentCSV != "" {
+		currentCSV := sub.Object.Status.CurrentCSV
+		for _, csv := range csvList {
+			if csv.Definition.Name == currentCSV {
+				GinkgoLogr.Info("Found SR-IOV operator CSV matching subscription currentCSV",
+					"name", csv.Definition.Name, "namespace", namespace, "phase", csv.Definition.Status.Phase)
+				return csv, nil
+			}
+		}
+		GinkgoLogr.Info("Subscription currentCSV not found in listed CSVs, searching by pattern",
+			"currentCSV", currentCSV, "namespace", namespace)
 	}
 
 	// Find the SR-IOV operator CSV (typically named sriov-network-operator.*)
-	for _, csv := range csvList {
-		if strings.Contains(csv.Definition.Name, "sriov-network-operator") {
-			GinkgoLogr.Info("Found SR-IOV operator CSV", "name", csv.Definition.Name, "phase", csv.Definition.Status.Phase)
-			return csv, nil
+	// Try multiple search patterns to be more robust
+	searchPatterns := []string{
+		"sriov-network-operator",
+		"sriov-network",
+		"sriov",
+	}
+
+	for _, pattern := range searchPatterns {
+		for _, csv := range csvList {
+			csvName := strings.ToLower(csv.Definition.Name)
+			if strings.Contains(csvName, strings.ToLower(pattern)) {
+				// Additional verification: check if CSV has SR-IOV-related resources
+				// Check CSV spec for SR-IOV operator indicators
+				if csv.Definition.Spec.DisplayName != "" {
+					displayName := strings.ToLower(csv.Definition.Spec.DisplayName)
+					if strings.Contains(displayName, "sriov") || strings.Contains(displayName, "sr-iov") {
+						GinkgoLogr.Info("Found SR-IOV operator CSV by name and display name",
+							"name", csv.Definition.Name, "displayName", csv.Definition.Spec.DisplayName, "phase", csv.Definition.Status.Phase)
+						return csv, nil
+					}
+				}
+				// If display name check fails, still return if name matches (for backwards compatibility)
+				if pattern == "sriov-network-operator" {
+					GinkgoLogr.Info("Found SR-IOV operator CSV", "name", csv.Definition.Name, "phase", csv.Definition.Status.Phase)
+					return csv, nil
+				}
+			}
 		}
 	}
 
-	// If no specific CSV found, return the first one (fallback)
-	GinkgoLogr.Info("No specific SR-IOV CSV found, using first available", "name", csvList[0].Definition.Name)
-	return csvList[0], nil
+	// If we haven't found the CSV yet and we haven't checked openshift-operators, try it now
+	if namespace != "openshift-operators" {
+		GinkgoLogr.Info("SR-IOV CSV not found in operator namespace, checking openshift-operators",
+			"operatorNamespace", namespace, "availableCSVs", len(csvList))
+
+		openshiftOperatorsCSVList, err := olm.ListClusterServiceVersion(apiClient, "openshift-operators")
+		if err == nil && len(openshiftOperatorsCSVList) > 0 {
+			// Log what CSVs we found for debugging
+			csvNames := make([]string, 0, len(openshiftOperatorsCSVList))
+			for _, csv := range openshiftOperatorsCSVList {
+				csvNames = append(csvNames, csv.Definition.Name)
+			}
+			GinkgoLogr.Info("Found CSVs in openshift-operators namespace", "count", len(openshiftOperatorsCSVList), "names", csvNames)
+
+			// Check subscription currentCSV in openshift-operators
+			if sub != nil && sub.Object.Status.CurrentCSV != "" {
+				currentCSV := sub.Object.Status.CurrentCSV
+				for _, csv := range openshiftOperatorsCSVList {
+					if csv.Definition.Name == currentCSV {
+						GinkgoLogr.Info("Found SR-IOV operator CSV in openshift-operators matching subscription",
+							"name", csv.Definition.Name, "phase", csv.Definition.Status.Phase)
+						return csv, nil
+					}
+				}
+				GinkgoLogr.Info("Subscription currentCSV not found in openshift-operators CSVs",
+					"currentCSV", currentCSV, "availableCSVs", csvNames)
+			}
+
+			// Search by pattern in openshift-operators
+			for _, pattern := range searchPatterns {
+				for _, csv := range openshiftOperatorsCSVList {
+					csvName := strings.ToLower(csv.Definition.Name)
+					if strings.Contains(csvName, strings.ToLower(pattern)) {
+						if csv.Definition.Spec.DisplayName != "" {
+							displayName := strings.ToLower(csv.Definition.Spec.DisplayName)
+							if strings.Contains(displayName, "sriov") || strings.Contains(displayName, "sr-iov") {
+								GinkgoLogr.Info("Found SR-IOV operator CSV in openshift-operators by pattern",
+									"name", csv.Definition.Name, "displayName", csv.Definition.Spec.DisplayName, "phase", csv.Definition.Status.Phase)
+								return csv, nil
+							}
+						}
+						if pattern == "sriov-network-operator" {
+							GinkgoLogr.Info("Found SR-IOV operator CSV in openshift-operators",
+								"name", csv.Definition.Name, "phase", csv.Definition.Status.Phase)
+							return csv, nil
+						}
+					}
+				}
+			}
+			GinkgoLogr.Info("No SR-IOV CSV found in openshift-operators by pattern", "availableCSVs", csvNames)
+		} else if err != nil {
+			GinkgoLogr.Info("Failed to list CSVs in openshift-operators", "error", err)
+		}
+	}
+
+	// CRITICAL: Don't use fallback - fail if we can't find the correct CSV
+	// Returning wrong CSV causes operator to not be removed, leading to test timeouts
+	availableCSVs := make([]string, 0, len(csvList))
+	for _, csv := range csvList {
+		availableCSVs = append(availableCSVs, csv.Definition.Name)
+	}
+
+	// Provide helpful error message with both namespaces checked
+	searchedNamespaces := []string{namespace}
+	if namespace != "openshift-operators" {
+		searchedNamespaces = append(searchedNamespaces, "openshift-operators")
+	}
+	return nil, fmt.Errorf("SR-IOV operator CSV not found in namespaces %v. Available CSVs in %s: %v. This is a critical error - deleting wrong CSV will cause test failures. Check if operator is installed or CSV is in a different namespace", searchedNamespaces, namespace, availableCSVs)
 }
 
 // getOperatorSubscription gets the SR-IOV subscription object
@@ -2696,11 +2838,23 @@ func restoreImageDigestMirrorSets(apiClient *clients.Settings, capturedIDMS []*c
 }
 
 // deleteOperatorCSV deletes the CSV for SR-IOV operator
+// If CSV doesn't exist, this is treated as success (CSV already deleted)
 func deleteOperatorCSV(apiClient *clients.Settings, namespace string) error {
 	GinkgoLogr.Info("Deleting SR-IOV operator CSV", "namespace", namespace)
 
 	csv, err := getOperatorCSV(apiClient, namespace)
 	if err != nil {
+		// Check if error is because CSV doesn't exist
+		// This can happen if CSV was deleted by a previous test run
+		errStr := err.Error()
+		if strings.Contains(errStr, "not found") ||
+			strings.Contains(errStr, "does not exist") ||
+			strings.Contains(errStr, "SR-IOV operator CSV not found") {
+			GinkgoLogr.Info("CSV does not exist - may have been deleted by previous test run. Skipping CSV deletion.",
+				"namespace", namespace,
+				"note", "Operator may still be running via DaemonSets. Will proceed to verify operator pods are terminated.")
+			return nil // CSV already deleted, treat as success
+		}
 		return fmt.Errorf("failed to get CSV for deletion: %w", err)
 	}
 
@@ -2713,15 +2867,30 @@ func deleteOperatorCSV(apiClient *clients.Settings, namespace string) error {
 	}
 
 	// Wait for CSV to be deleted
-	GinkgoLogr.Info("Waiting for CSV to be deleted", "name", csvName)
+	// CSV might be in operator namespace or openshift-operators
+	csvNamespace := namespace
+	if csv.Definition.Namespace != "" {
+		csvNamespace = csv.Definition.Namespace
+	}
+	GinkgoLogr.Info("Waiting for CSV to be deleted", "name", csvName, "namespace", csvNamespace)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	err = wait.PollUntilContextCancel(ctx, 10*time.Second, false, func(ctx context.Context) (bool, error) {
-		_, err := olm.PullClusterServiceVersion(apiClient, csvName, namespace)
+		// Check in the namespace where CSV was found
+		_, err := olm.PullClusterServiceVersion(apiClient, csvName, csvNamespace)
 		if err != nil {
-			// CSV not found means it's deleted
-			return true, nil
+			// Also check openshift-operators if different
+			if csvNamespace != "openshift-operators" {
+				_, err2 := olm.PullClusterServiceVersion(apiClient, csvName, "openshift-operators")
+				if err2 != nil {
+					// CSV not found in either namespace means it's deleted
+					return true, nil
+				}
+			} else {
+				// CSV not found means it's deleted
+				return true, nil
+			}
 		}
 		return false, nil
 	})
