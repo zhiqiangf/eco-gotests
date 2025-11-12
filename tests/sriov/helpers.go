@@ -4319,13 +4319,14 @@ func WORKAROUND_extractResourceNameFromNetworkName(networkName string) string {
 //	❌ Check 7-9: CNI config structure, resourceName field
 //	✅ New: Single check - NAD.Pull() succeeds = NAD exists and is valid
 func WORKAROUND_verifyNADVisible(apiClient *clients.Settings, nadName, targetNamespace, expectedResourceName string) error {
-	GinkgoLogr.Info("WORKAROUND: Verifying NAD is visible (actual existence check)",
+	GinkgoLogr.Info("WORKAROUND: Verifying NAD is visible and has valid CNI config",
 		"nadName", nadName, "namespace", targetNamespace, "expectedResourceName", expectedResourceName)
 
-	// Wait up to 30 seconds for NAD to be visible in API
+	// Wait up to 60 seconds for NAD to be visible in API with valid config
 	// Kubernetes eventual consistency typically completes in <5 seconds
-	// 30 seconds provides ample margin
-	maxWait := 30 * time.Second
+	// CNI config population might take longer
+	// 60 seconds provides safe margin for manual creation fallback
+	maxWait := 60 * time.Second
 	checkInterval := 500 * time.Millisecond
 	startTime := time.Now()
 
@@ -4335,9 +4336,8 @@ func WORKAROUND_verifyNADVisible(apiClient *clients.Settings, nadName, targetNam
 			return fmt.Errorf("NAD visibility timeout: NAD %s/%s not available in API server after %v", targetNamespace, nadName, maxWait)
 		}
 
-		// CRITICAL FIX: Actually verify the NAD exists in the cluster!
-		// Previous implementation just checked if a builder object could be created (not if it exists!)
-		// Now we verify it actually exists using Exists() method
+		// CRITICAL: Actually verify the NAD exists in the cluster!
+		// nad.Pull() returns a builder, not guaranteed cluster existence
 		nadObj, err := nad.Pull(apiClient, nadName, targetNamespace)
 		if err != nil {
 			GinkgoLogr.Info("WORKAROUND: NAD pull failed (doesn't exist yet), retrying...",
@@ -4353,7 +4353,7 @@ func WORKAROUND_verifyNADVisible(apiClient *clients.Settings, nadName, targetNam
 			continue
 		}
 
-		// CRITICAL: Check if NAD actually exists in the cluster!
+		// CRITICAL: Check if NAD actually exists in the cluster at API level!
 		// builder.Exists() returns true only if resource exists in cluster
 		if !nadObj.Exists() {
 			GinkgoLogr.Info("WORKAROUND: NAD builder exists but resource doesn't exist in cluster yet, retrying...",
@@ -4376,8 +4376,48 @@ func WORKAROUND_verifyNADVisible(apiClient *clients.Settings, nadName, targetNam
 			continue
 		}
 
-		// NAD truly exists and is accessible!
-		GinkgoLogr.Info("WORKAROUND: NAD verified to exist in cluster (Exists() returned true)",
+		// CRITICAL NEW CHECK: Verify CNI config has required fields
+		// SR-IOV CNI requires these fields: type="sriov", resourceName
+		// The pciAddress is typically populated by the operator, but if missing it will cause pod creation to fail
+		if nadObj.Object.Spec.Config != "" {
+			var cniConfig map[string]interface{}
+			if err := json.Unmarshal([]byte(nadObj.Object.Spec.Config), &cniConfig); err == nil {
+				// Check for required SR-IOV CNI fields
+				cniType, hasType := cniConfig["type"].(string)
+				resourceName, hasResourceName := cniConfig["resourceName"].(string)
+
+				if !hasType || cniType != "sriov" {
+					GinkgoLogr.Info("WORKAROUND: CNI config missing or invalid type field, retrying...",
+						"nadName", nadName, "namespace", targetNamespace, "cniType", cniType, "hasType", hasType)
+					time.Sleep(checkInterval)
+					continue
+				}
+
+				if !hasResourceName || resourceName == "" {
+					GinkgoLogr.Info("WORKAROUND: CNI config missing resourceName field, retrying...",
+						"nadName", nadName, "namespace", targetNamespace)
+					time.Sleep(checkInterval)
+					continue
+				}
+
+				GinkgoLogr.Info("WORKAROUND: CNI config verified with required fields",
+					"nadName", nadName, "namespace", targetNamespace,
+					"cniType", cniType, "resourceName", resourceName)
+			} else {
+				GinkgoLogr.Info("WORKAROUND: Failed to parse CNI config JSON, retrying...",
+					"nadName", nadName, "namespace", targetNamespace, "config", nadObj.Object.Spec.Config)
+				time.Sleep(checkInterval)
+				continue
+			}
+		} else {
+			GinkgoLogr.Info("WORKAROUND: NAD config is empty, retrying...",
+				"nadName", nadName, "namespace", targetNamespace)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// NAD truly exists and has valid CNI config!
+		GinkgoLogr.Info("WORKAROUND: NAD verified to exist in cluster with valid CNI config",
 			"nadName", nadName, "namespace", targetNamespace,
 			"resourceName", expectedResourceName, "elapsed", elapsed)
 		return nil
