@@ -16,6 +16,7 @@ import (
 	configv1 "github.com/openshift/api/config/v1"
 	machineconfigv1 "github.com/openshift/api/machineconfiguration/v1"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/clients"
+	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/configmap"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/daemonset"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/nad"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/namespace"
@@ -637,6 +638,318 @@ func verifyWorkerNodesReady(workerNodes []*nodes.Builder, sriovOpNs string) bool
 	return true
 }
 
+// cleanupConflictingPolicies removes policies that conflict with the new policy being created
+// A conflict occurs when two policies use the same physical function (PF)
+// This function checks both Kubernetes API policies AND device plugin configmap for conflicts
+func cleanupConflictingPolicies(apiClient *clients.Settings, sriovOperatorNamespace, newPolicyName, interfaceName string, targetNode string) error {
+	GinkgoLogr.Info("Checking for conflicting SR-IOV policies before creating new policy",
+		"newPolicy", newPolicyName, "interfaceName", interfaceName, "targetNode", targetNode)
+
+	// Extract base PF name (remove range suffix like "#0-1" if present)
+	basePF := interfaceName
+	if idx := strings.Index(interfaceName, "#"); idx > 0 {
+		basePF = interfaceName[:idx]
+	}
+
+	// Also check device plugin configmap for stale policies
+	// The configmap is named "device-plugin-config" and has node-specific keys
+	// Each node has its own key (e.g., "anl231.sriov.openshift-qe.sdn.com")
+	conflictingPoliciesFromConfigmap := []string{}
+	configMapBuilder, err := configmap.Pull(apiClient, "device-plugin-config", sriovOperatorNamespace)
+	if err == nil && configMapBuilder != nil && configMapBuilder.Object != nil {
+		// The configmap has node-specific keys, so we need to check the target node's key
+		if targetNode != "" {
+			configJSON, exists := configMapBuilder.Object.Data[targetNode]
+			if exists {
+				var config struct {
+					ResourceList []struct {
+						ResourceName string `json:"resourceName"`
+						Selectors    struct {
+							PfNames []string `json:"pfNames"`
+						} `json:"selectors"`
+					} `json:"resourceList"`
+				}
+
+				if err := json.Unmarshal([]byte(configJSON), &config); err == nil {
+					for _, resource := range config.ResourceList {
+						// Skip the new policy itself
+						if resource.ResourceName == newPolicyName {
+							continue
+						}
+
+						// Check if this resource uses any PF that might conflict
+						// The configmap uses actual PF names from the node (e.g., "eno12399"),
+						// while the input interfaceName might be different (e.g., "ens2f0").
+						// The operator maps interface names to actual PF names, so we need to check
+						// if any policy in the configmap uses a PF that might be the same physical interface.
+						if len(resource.Selectors.PfNames) > 0 {
+							// Check if this policy exists in Kubernetes API
+							// If it doesn't exist in API but is in configmap, it's a stale policy that should be cleaned up
+							_, apiErr := sriov.PullPolicy(apiClient, resource.ResourceName, sriovOperatorNamespace)
+							if apiErr != nil {
+								// Policy doesn't exist in Kubernetes API but is in configmap - it's stale
+								// This is definitely a conflict candidate since it's using resources but not in API
+								conflictingPoliciesFromConfigmap = append(conflictingPoliciesFromConfigmap, resource.ResourceName)
+								GinkgoLogr.Info("Found stale policy in device plugin configmap (not in Kubernetes API)",
+									"stalePolicy", resource.ResourceName,
+									"newPolicy", newPolicyName,
+									"pfNames", resource.Selectors.PfNames,
+									"node", targetNode,
+									"note", "This policy is in configmap but not in Kubernetes API - will wait for cleanup")
+							} else {
+								// Policy exists in API - check if it uses the same PF
+								for _, pfName := range resource.Selectors.PfNames {
+									// Extract base PF name (remove range suffix)
+									policyBasePF := pfName
+									if idx := strings.Index(pfName, "#"); idx > 0 {
+										policyBasePF = pfName[:idx]
+									}
+
+									// Check if it matches the input interface name
+									// (exact match means same PF name, which is a conflict)
+									if policyBasePF == basePF {
+										conflictingPoliciesFromConfigmap = append(conflictingPoliciesFromConfigmap, resource.ResourceName)
+										GinkgoLogr.Info("Found conflicting policy in device plugin configmap (exact PF match)",
+											"conflictingPolicy", resource.ResourceName,
+											"newPolicy", newPolicyName,
+											"pf", basePF,
+											"node", targetNode)
+										break
+									}
+								}
+							}
+						}
+					}
+				} else {
+					GinkgoLogr.Info("Failed to parse device plugin configmap JSON for node",
+						"error", err, "configmap", "device-plugin-config", "node", targetNode)
+				}
+			} else {
+				GinkgoLogr.Info("Device plugin configmap missing node-specific config",
+					"configmap", "device-plugin-config", "node", targetNode)
+			}
+		} else {
+			// If no target node specified, check all node keys
+			for nodeKey, configJSON := range configMapBuilder.Object.Data {
+				var config struct {
+					ResourceList []struct {
+						ResourceName string `json:"resourceName"`
+						Selectors    struct {
+							PfNames []string `json:"pfNames"`
+						} `json:"selectors"`
+					} `json:"resourceList"`
+				}
+
+				if err := json.Unmarshal([]byte(configJSON), &config); err == nil {
+					for _, resource := range config.ResourceList {
+						if resource.ResourceName == newPolicyName {
+							continue
+						}
+
+						for _, pfName := range resource.Selectors.PfNames {
+							policyBasePF := pfName
+							if idx := strings.Index(pfName, "#"); idx > 0 {
+								policyBasePF = pfName[:idx]
+							}
+
+							if policyBasePF == basePF {
+								conflictingPoliciesFromConfigmap = append(conflictingPoliciesFromConfigmap, resource.ResourceName)
+								GinkgoLogr.Info("Found conflicting policy in device plugin configmap",
+									"conflictingPolicy", resource.ResourceName,
+									"newPolicy", newPolicyName,
+									"pf", basePF,
+									"node", nodeKey)
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	} else {
+		GinkgoLogr.Info("Failed to pull device plugin configmap (may not exist yet)",
+			"configmap", "device-plugin-config", "error", err)
+	}
+
+	// List all existing policies from Kubernetes API
+	sriovPolicies, err := sriov.ListPolicy(apiClient, sriovOperatorNamespace)
+	if err != nil {
+		return fmt.Errorf("failed to list SR-IOV policies: %w", err)
+	}
+
+	conflictingPolicies := []string{}
+	conflictingPolicyMap := make(map[string]bool)
+
+	// Add policies from configmap to the map
+	for _, policyName := range conflictingPoliciesFromConfigmap {
+		conflictingPolicyMap[policyName] = true
+		conflictingPolicies = append(conflictingPolicies, policyName)
+	}
+
+	for _, policy := range sriovPolicies {
+		policyName := policy.Object.Name
+		// Skip the default policy and the new policy itself
+		if policyName == "default" || policyName == newPolicyName {
+			continue
+		}
+
+		// Check if this policy targets the same node
+		nodeSelector := policy.Object.Spec.NodeSelector
+		policyTargetNode := ""
+		if nodeSelector != nil {
+			policyTargetNode = nodeSelector["kubernetes.io/hostname"]
+		}
+
+		// Check if policy uses the same PF
+		pfNames := policy.Object.Spec.NicSelector.PfNames
+		for _, pfName := range pfNames {
+			// Extract base PF name from policy's pfName (remove range suffix)
+			policyBasePF := pfName
+			if idx := strings.Index(pfName, "#"); idx > 0 {
+				policyBasePF = pfName[:idx]
+			}
+
+			// Check if it's the same PF and same node
+			if policyBasePF == basePF && (targetNode == "" || policyTargetNode == targetNode) {
+				// Only add if not already in the list
+				if !conflictingPolicyMap[policyName] {
+					conflictingPolicies = append(conflictingPolicies, policyName)
+					conflictingPolicyMap[policyName] = true
+					GinkgoLogr.Info("Found conflicting policy in Kubernetes API",
+						"conflictingPolicy", policyName,
+						"newPolicy", newPolicyName,
+						"pf", basePF,
+						"node", targetNode)
+				}
+				break
+			}
+		}
+	}
+
+	if len(conflictingPolicies) == 0 {
+		GinkgoLogr.Info("No conflicting policies found", "newPolicy", newPolicyName)
+		return nil
+	}
+
+	// Delete conflicting policies
+	GinkgoLogr.Info("Deleting conflicting policies", "count", len(conflictingPolicies), "policies", conflictingPolicies)
+	for _, policyName := range conflictingPolicies {
+		// Try to delete from Kubernetes API (may not exist if it's only in configmap)
+		policy, err := sriov.PullPolicy(apiClient, policyName, sriovOperatorNamespace)
+		if err != nil {
+			GinkgoLogr.Info("Conflicting policy not found in Kubernetes API (may only exist in configmap)",
+				"policy", policyName, "error", err,
+				"note", "Will wait for configmap to be updated")
+			// Continue to wait for configmap update even if policy doesn't exist in API
+		} else {
+			resourceName := policy.Object.Spec.ResourceName
+			GinkgoLogr.Info("Deleting conflicting policy from Kubernetes API", "policy", policyName, "resourceName", resourceName)
+
+			err = policy.Delete()
+			if err != nil {
+				GinkgoLogr.Info("Failed to delete conflicting policy (continuing cleanup)",
+					"policy", policyName, "error", err)
+			} else {
+				// Wait for device plugin to reconcile after policy deletion
+				GinkgoLogr.Info("Waiting for device plugin to reconcile after conflicting policy deletion",
+					"policy", policyName, "resourceName", resourceName)
+
+				err = waitForDevicePluginReconcile(apiClient, sriovOperatorNamespace, resourceName, 2*time.Minute)
+				if err != nil {
+					GinkgoLogr.Info("Device plugin reconciliation check completed with warning",
+						"policy", policyName, "resourceName", resourceName, "error", err)
+				}
+			}
+		}
+	}
+
+	// Wait for device plugin configmap to be updated (policy removed from configmap)
+	GinkgoLogr.Info("Waiting for device plugin configmap to be updated after conflicting policy cleanup",
+		"conflictingPolicies", conflictingPolicies)
+	err = waitForDevicePluginConfigmapUpdate(apiClient, sriovOperatorNamespace, conflictingPolicies, 3*time.Minute)
+	if err != nil {
+		GinkgoLogr.Info("Device plugin configmap update check completed with warning",
+			"conflictingPolicies", conflictingPolicies, "error", err,
+			"hint", "Configmap may update later. Test will continue.")
+	}
+
+	return nil
+}
+
+// waitForDevicePluginConfigmapUpdate waits for the device plugin configmap to be updated
+// to reflect that the specified policies have been removed
+func waitForDevicePluginConfigmapUpdate(apiClient *clients.Settings, sriovOperatorNamespace string, removedPolicyNames []string, timeout time.Duration) error {
+	GinkgoLogr.Info("Waiting for device plugin configmap to be updated",
+		"removedPolicies", removedPolicyNames, "timeout", timeout)
+
+	startTime := time.Now()
+	checkInterval := 5 * time.Second
+
+	for {
+		elapsed := time.Since(startTime)
+		if elapsed > timeout {
+			return fmt.Errorf("timeout waiting for device plugin configmap update after %v", timeout)
+		}
+
+		// Get device plugin configmap (named "device-plugin-config")
+		// The configmap has node-specific keys, so we need to check all nodes
+		configMapBuilder, err := configmap.Pull(apiClient, "device-plugin-config", sriovOperatorNamespace)
+		if err != nil || configMapBuilder == nil || configMapBuilder.Object == nil {
+			GinkgoLogr.Info("Device plugin configmap not found, waiting...",
+				"configmap", "device-plugin-config", "elapsed", elapsed, "error", err)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// Check all node-specific keys in the configmap
+		stillPresent := []string{}
+		for nodeKey, configJSON := range configMapBuilder.Object.Data {
+			// Skip empty or null resource lists
+			if configJSON == "" || configJSON == "null" {
+				continue
+			}
+
+			var config struct {
+				ResourceList []struct {
+					ResourceName string `json:"resourceName"`
+				} `json:"resourceList"`
+			}
+
+			if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
+				GinkgoLogr.Info("Failed to parse configmap JSON for node, waiting...",
+					"node", nodeKey, "elapsed", elapsed, "error", err)
+				continue
+			}
+
+			// Check if any of the removed policies are still in this node's config
+			for _, resource := range config.ResourceList {
+				for _, removedPolicy := range removedPolicyNames {
+					if resource.ResourceName == removedPolicy {
+						stillPresent = append(stillPresent, fmt.Sprintf("%s@%s", removedPolicy, nodeKey))
+					}
+				}
+			}
+		}
+
+		if len(stillPresent) == 0 {
+			GinkgoLogr.Info("Device plugin configmap updated - all conflicting policies removed",
+				"removedPolicies", removedPolicyNames, "elapsed", elapsed)
+			return nil
+		}
+
+		// Log progress every 30 seconds
+		if int(elapsed.Seconds())%30 == 0 {
+			GinkgoLogr.Info("Still waiting for device plugin configmap update",
+				"removedPolicies", removedPolicyNames,
+				"stillPresent", stillPresent,
+				"elapsed", elapsed,
+				"timeout", timeout)
+		}
+
+		time.Sleep(checkInterval)
+	}
+}
+
 // initVF initializes VF for the given device
 func initVF(name, deviceID, interfaceName, vendor, sriovOpNs string, vfNum int, workerNodes []*nodes.Builder) bool {
 	By(fmt.Sprintf("Initializing VF for device %s", name))
@@ -650,6 +963,15 @@ func initVF(name, deviceID, interfaceName, vendor, sriovOpNs string, vfNum int, 
 
 	// Check if the device exists on any worker node
 	for _, node := range workerNodes {
+		// Clean up any conflicting policies before creating the new one
+		By("Checking for and cleaning up conflicting policies")
+		err := cleanupConflictingPolicies(getAPIClient(), sriovOpNs, name, interfaceName, node.Definition.Name)
+		if err != nil {
+			GinkgoLogr.Info("Failed to cleanup conflicting policies (continuing anyway)",
+				"error", err, "policy", name)
+			// Continue anyway - the test will fail later if there's a real conflict
+		}
+
 		pfSelector := fmt.Sprintf("%s#0-%d", interfaceName, vfNum-1)
 		GinkgoLogr.Info("Creating SRIOV policy", "name", name, "node", node.Definition.Name,
 			"pfSelector", pfSelector, "deviceID", deviceID, "vendor", vendor, "interfaceName", interfaceName)
@@ -668,7 +990,7 @@ func initVF(name, deviceID, interfaceName, vendor, sriovOpNs string, vfNum int, 
 			map[string]string{"kubernetes.io/hostname": node.Definition.Name},
 		).WithDevType("netdevice")
 
-		_, err := sriovPolicy.Create()
+		_, err = sriovPolicy.Create()
 		if err != nil {
 			GinkgoLogr.Info("Failed to create SRIOV policy", "error", err, "node", node.Definition.Name,
 				"pfSelector", pfSelector, "deviceID", deviceID, "vendor", vendor, "interfaceName", interfaceName,
@@ -691,6 +1013,32 @@ func initVF(name, deviceID, interfaceName, vendor, sriovOpNs string, vfNum int, 
 		}
 
 		GinkgoLogr.Info("SRIOV policy successfully applied", "name", name, "node", node.Definition.Name)
+
+		// Wait for device plugin to reconcile and create resource pool for this policy
+		// The device plugin needs to restart or reconcile to pick up the new policy and create the resource pool
+		GinkgoLogr.Info("Waiting for device plugin to reconcile and create resource pool", "policy", name, "resourceName", name)
+		err = waitForDevicePluginResourcePool(getAPIClient(), sriovOpNs, name, 2*time.Minute)
+		if err != nil {
+			GinkgoLogr.Info("Device plugin resource pool not created within timeout, attempting to restart device plugin pod",
+				"policy", name, "resourceName", name, "error", err)
+
+			// Try to restart the device plugin pod to force it to pick up the new policy
+			restartErr := restartDevicePluginPod(getAPIClient(), sriovOpNs)
+			if restartErr != nil {
+				GinkgoLogr.Info("Failed to restart device plugin pod, will continue anyway",
+					"policy", name, "error", restartErr)
+			} else {
+				// Wait again after restart
+				GinkgoLogr.Info("Device plugin pod restarted, waiting again for resource pool", "policy", name)
+				err = waitForDevicePluginResourcePool(getAPIClient(), sriovOpNs, name, 2*time.Minute)
+				if err != nil {
+					GinkgoLogr.Info("Device plugin resource pool check completed with warning after restart",
+						"policy", name, "resourceName", name, "error", err,
+						"hint", "Device plugin may reconcile later. Test will continue and verify VF resources are available.")
+				}
+			}
+		}
+
 		return true
 	}
 
@@ -1759,8 +2107,307 @@ func cleanupLeftoverResources(apiClient *clients.Settings, sriovOperatorNamespac
 		}
 	}
 
-	// Step 3: Log cleanup summary
+	// Step 3: Clean up leftover SR-IOV policies that might conflict with test policies
+	By("Cleaning up leftover SR-IOV policies from previous runs")
+	sriovPolicies, err := sriov.ListPolicy(apiClient, sriovOperatorNamespace)
+	if err != nil {
+		GinkgoLogr.Info("Failed to list SriovNetworkNodePolicies for cleanup", "error", err)
+	} else {
+		for _, policy := range sriovPolicies {
+			policyName := policy.Object.Name
+			// Skip the default policy - it should never be deleted
+			if policyName == "default" {
+				continue
+			}
+
+			// Clean up policies that look like test policies or might conflict
+			// This includes policies with test-like names (e.g., "testcve")
+			// that are likely leftovers from previous test runs
+			shouldCleanup := false
+
+			// Clean up policies with test-like names that might conflict
+			if strings.HasPrefix(policyName, "test") || strings.Contains(policyName, "cve") {
+				shouldCleanup = true
+			}
+
+			if shouldCleanup {
+				GinkgoLogr.Info("Removing leftover SR-IOV policy that might conflict",
+					"policy", policyName, "resourceName", policy.Object.Spec.ResourceName)
+
+				err := policy.Delete()
+				if err != nil {
+					GinkgoLogr.Info("Failed to delete leftover SR-IOV policy (continuing cleanup)",
+						"policy", policyName, "error", err)
+				} else {
+					// Wait for policy deletion to propagate and device plugin to restart/reconcile
+					// The device plugin needs to restart to release VFs allocated to deleted policies
+					GinkgoLogr.Info("Waiting for device plugin to reconcile after policy deletion",
+						"policy", policyName, "resourceName", policy.Object.Spec.ResourceName)
+
+					// Wait for device plugin to restart or for VF resources to be released
+					err = waitForDevicePluginReconcile(apiClient, sriovOperatorNamespace, policy.Object.Spec.ResourceName, 2*time.Minute)
+					if err != nil {
+						GinkgoLogr.Info("Device plugin reconciliation check completed with warning",
+							"policy", policyName, "resourceName", policy.Object.Spec.ResourceName, "error", err)
+						// Continue anyway - the device plugin may reconcile later
+					}
+				}
+			}
+		}
+	}
+
+	// Step 4: Log cleanup summary
 	GinkgoLogr.Info("Cleanup of leftover resources completed")
+}
+
+// waitForDevicePluginReconcile waits for the device plugin to restart or for VF resources
+// to be released after a policy deletion. This ensures VFs are available for new policies.
+func waitForDevicePluginReconcile(apiClient *clients.Settings, sriovOperatorNamespace, deletedResourceName string, timeout time.Duration) error {
+	GinkgoLogr.Info("Waiting for device plugin to reconcile after policy deletion",
+		"deletedResourceName", deletedResourceName, "timeout", timeout)
+
+	startTime := time.Now()
+	checkInterval := 5 * time.Second
+	resourceKey := fmt.Sprintf("openshift.io/%s", deletedResourceName)
+
+	// Get initial device plugin pod state
+	devicePluginPods, err := pod.List(apiClient, sriovOperatorNamespace, metav1.ListOptions{
+		LabelSelector: "app=sriov-device-plugin",
+	})
+	if err != nil {
+		GinkgoLogr.Info("Failed to list device plugin pods, will check resource release instead",
+			"error", err)
+		devicePluginPods = []*pod.Builder{}
+	}
+
+	var initialPodCreationTime *time.Time
+	if len(devicePluginPods) > 0 {
+		// Get the first device plugin pod's creation timestamp
+		if devicePluginPods[0].Object != nil && devicePluginPods[0].Object.CreationTimestamp.Time != (time.Time{}) {
+			creationTime := devicePluginPods[0].Object.CreationTimestamp.Time
+			initialPodCreationTime = &creationTime
+			GinkgoLogr.Info("Device plugin pod initial state",
+				"pod", devicePluginPods[0].Object.Name,
+				"creationTime", initialPodCreationTime.Format(time.RFC3339))
+		}
+	}
+
+	for {
+		elapsed := time.Since(startTime)
+		if elapsed > timeout {
+			return fmt.Errorf("timeout waiting for device plugin to reconcile after %v", timeout)
+		}
+
+		// Check 1: Device plugin pod has restarted (newer creation timestamp)
+		if initialPodCreationTime != nil && len(devicePluginPods) > 0 {
+			currentPods, err := pod.List(apiClient, sriovOperatorNamespace, metav1.ListOptions{
+				LabelSelector: "app=sriov-device-plugin",
+			})
+			if err == nil && len(currentPods) > 0 {
+				currentPod := currentPods[0]
+				if currentPod.Object != nil && currentPod.Object.CreationTimestamp.Time != (time.Time{}) {
+					currentCreationTime := currentPod.Object.CreationTimestamp.Time
+					// If pod was recreated (newer timestamp), device plugin has restarted
+					if currentCreationTime.After(*initialPodCreationTime) {
+						GinkgoLogr.Info("Device plugin pod has restarted",
+							"oldCreationTime", initialPodCreationTime.Format(time.RFC3339),
+							"newCreationTime", currentCreationTime.Format(time.RFC3339),
+							"elapsed", elapsed)
+						return nil
+					}
+				}
+			}
+		}
+
+		// Check 2: VF resource is no longer advertised on nodes (released)
+		workerNodes, err := nodes.List(apiClient, metav1.ListOptions{LabelSelector: NetConfig.WorkerLabel})
+		if err == nil {
+			resourceStillExists := false
+			for _, node := range workerNodes {
+				allocatable := node.Definition.Status.Allocatable
+				if _, exists := allocatable[corev1.ResourceName(resourceKey)]; exists {
+					resourceStillExists = true
+					break
+				}
+			}
+
+			if !resourceStillExists {
+				GinkgoLogr.Info("VF resource released from nodes (device plugin reconciled)",
+					"resource", resourceKey, "elapsed", elapsed)
+				return nil
+			}
+		}
+
+		// Log progress every 15 seconds
+		if int(elapsed.Seconds())%15 == 0 {
+			GinkgoLogr.Info("Still waiting for device plugin to reconcile",
+				"deletedResourceName", deletedResourceName,
+				"resource", resourceKey,
+				"elapsed", elapsed,
+				"timeout", timeout)
+		}
+
+		time.Sleep(checkInterval)
+	}
+}
+
+// waitForDevicePluginResourcePool waits for the device plugin to create a resource pool
+// for a newly created policy. This ensures VF resources are available before proceeding.
+func waitForDevicePluginResourcePool(apiClient *clients.Settings, sriovOperatorNamespace, resourceName string, timeout time.Duration) error {
+	GinkgoLogr.Info("Waiting for device plugin to create resource pool",
+		"resourceName", resourceName, "timeout", timeout)
+
+	startTime := time.Now()
+	checkInterval := 5 * time.Second
+	resourceKey := fmt.Sprintf("openshift.io/%s", resourceName)
+
+	// Get initial device plugin pod state
+	devicePluginPods, err := pod.List(apiClient, sriovOperatorNamespace, metav1.ListOptions{
+		LabelSelector: "app=sriov-device-plugin",
+	})
+	if err != nil {
+		GinkgoLogr.Info("Failed to list device plugin pods, will check resource availability instead",
+			"error", err)
+		devicePluginPods = []*pod.Builder{}
+	}
+
+	var initialPodCreationTime *time.Time
+	if len(devicePluginPods) > 0 {
+		// Get the first device plugin pod's creation timestamp
+		if devicePluginPods[0].Object != nil && devicePluginPods[0].Object.CreationTimestamp.Time != (time.Time{}) {
+			creationTime := devicePluginPods[0].Object.CreationTimestamp.Time
+			initialPodCreationTime = &creationTime
+			GinkgoLogr.Info("Device plugin pod initial state",
+				"pod", devicePluginPods[0].Object.Name,
+				"creationTime", initialPodCreationTime.Format(time.RFC3339))
+		}
+	}
+
+	for {
+		elapsed := time.Since(startTime)
+		if elapsed > timeout {
+			return fmt.Errorf("timeout waiting for device plugin resource pool after %v", timeout)
+		}
+
+		// Check 1: Device plugin pod has restarted (newer creation timestamp)
+		if initialPodCreationTime != nil && len(devicePluginPods) > 0 {
+			currentPods, err := pod.List(apiClient, sriovOperatorNamespace, metav1.ListOptions{
+				LabelSelector: "app=sriov-device-plugin",
+			})
+			if err == nil && len(currentPods) > 0 {
+				currentPod := currentPods[0]
+				if currentPod.Object != nil && currentPod.Object.CreationTimestamp.Time != (time.Time{}) {
+					currentCreationTime := currentPod.Object.CreationTimestamp.Time
+					// If pod was recreated (newer timestamp), device plugin has restarted
+					if currentCreationTime.After(*initialPodCreationTime) {
+						GinkgoLogr.Info("Device plugin pod has restarted",
+							"oldCreationTime", initialPodCreationTime.Format(time.RFC3339),
+							"newCreationTime", currentCreationTime.Format(time.RFC3339),
+							"elapsed", elapsed)
+						// Pod restarted, but still need to verify resource is available
+						// Continue to check 2
+					}
+				}
+			}
+		}
+
+		// Check 2: VF resource is now advertised on nodes (resource pool created)
+		workerNodes, err := nodes.List(apiClient, metav1.ListOptions{LabelSelector: NetConfig.WorkerLabel})
+		if err == nil {
+			for _, node := range workerNodes {
+				allocatable := node.Definition.Status.Allocatable
+				if value, exists := allocatable[corev1.ResourceName(resourceKey)]; exists {
+					// Resource exists and has value > 0
+					if value.Value() > 0 {
+						GinkgoLogr.Info("VF resource pool created and available on node",
+							"resource", resourceKey, "node", node.Definition.Name,
+							"value", value.String(), "elapsed", elapsed)
+						return nil
+					}
+				}
+			}
+		}
+
+		// Log progress every 15 seconds
+		if int(elapsed.Seconds())%15 == 0 {
+			GinkgoLogr.Info("Still waiting for device plugin to create resource pool",
+				"resourceName", resourceName,
+				"resource", resourceKey,
+				"elapsed", elapsed,
+				"timeout", timeout)
+		}
+
+		time.Sleep(checkInterval)
+	}
+}
+
+// restartDevicePluginPod restarts the device plugin pod to force it to pick up new policy configurations
+func restartDevicePluginPod(apiClient *clients.Settings, sriovOperatorNamespace string) error {
+	GinkgoLogr.Info("Attempting to restart device plugin pod to pick up new policy configuration")
+
+	// List device plugin pods
+	devicePluginPods, err := pod.List(apiClient, sriovOperatorNamespace, metav1.ListOptions{
+		LabelSelector: "app=sriov-device-plugin",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list device plugin pods: %w", err)
+	}
+
+	if len(devicePluginPods) == 0 {
+		return fmt.Errorf("no device plugin pods found")
+	}
+
+	// Delete the first device plugin pod (DaemonSet will recreate it)
+	podToRestart := devicePluginPods[0]
+	if podToRestart.Object == nil {
+		return fmt.Errorf("device plugin pod object is nil")
+	}
+
+	podName := podToRestart.Object.Name
+	oldCreationTime := podToRestart.Object.CreationTimestamp.Time
+	GinkgoLogr.Info("Deleting device plugin pod to trigger restart", "pod", podName, "namespace", sriovOperatorNamespace, "creationTime", oldCreationTime.Format(time.RFC3339))
+
+	_, err = podToRestart.Delete()
+	if err != nil {
+		return fmt.Errorf("failed to delete device plugin pod %s: %w", podName, err)
+	}
+
+	// Wait for pod to be recreated and running
+	GinkgoLogr.Info("Waiting for device plugin pod to be recreated", "namespace", sriovOperatorNamespace)
+	maxWait := 2 * time.Minute
+	checkInterval := 5 * time.Second
+	startTime := time.Now()
+
+	for {
+		elapsed := time.Since(startTime)
+		if elapsed > maxWait {
+			return fmt.Errorf("timeout waiting for device plugin pod to restart after %v", maxWait)
+		}
+
+		currentPods, err := pod.List(apiClient, sriovOperatorNamespace, metav1.ListOptions{
+			LabelSelector: "app=sriov-device-plugin",
+		})
+		if err == nil && len(currentPods) > 0 {
+			currentPod := currentPods[0]
+			if currentPod.Object != nil {
+				// Check if pod is running and has a newer creation timestamp
+				if currentPod.Object.Status.Phase == corev1.PodRunning {
+					// Verify it's a new pod (different name or newer creation time)
+					if currentPod.Object.Name != podName ||
+						(currentPod.Object.CreationTimestamp.Time.After(oldCreationTime)) {
+						GinkgoLogr.Info("Device plugin pod restarted successfully",
+							"oldPod", podName, "newPod", currentPod.Object.Name,
+							"oldCreationTime", oldCreationTime.Format(time.RFC3339),
+							"newCreationTime", currentPod.Object.CreationTimestamp.Time.Format(time.RFC3339),
+							"elapsed", elapsed)
+						return nil
+					}
+				}
+			}
+		}
+
+		time.Sleep(checkInterval)
+	}
 }
 
 // ==================== OLM Management Functions ====================
@@ -3316,9 +3963,28 @@ func WORKAROUND_ensureNADExistsWithFallback(apiClient *clients.Settings, nadName
 		nadObj, err := nad.Pull(apiClient, nadName, targetNamespace)
 		if err == nil && nadObj != nil && nadObj.Object != nil && nadObj.Object.Name != "" {
 			// NAD exists and is valid - operator created it successfully
-			GinkgoLogr.Info("WORKAROUND: NAD exists - operator successfully created it",
-				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed, "retries", retryCount)
-			return nil
+			// Verify it's visible and accessible for webhook
+			// Extract resource name from SriovNetwork for verification
+			sriovNetObj, pullErr := sriov.PullNetwork(apiClient, sriovNetworkName, "openshift-sriov-network-operator")
+			if pullErr == nil && sriovNetObj != nil && sriovNetObj.Object != nil {
+				resourceName := sriovNetObj.Object.Spec.ResourceName
+				verifyErr := WORKAROUND_verifyNADVisible(apiClient, nadName, targetNamespace, resourceName)
+				if verifyErr == nil {
+					GinkgoLogr.Info("WORKAROUND: NAD exists and verified - operator successfully created it",
+						"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed, "retries", retryCount)
+					return nil
+				}
+				GinkgoLogr.Info("WORKAROUND: NAD exists but verification failed, will retry...",
+					"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed, "error", verifyErr)
+			} else {
+				// If we can't get SriovNetwork, just verify basic visibility
+				// (annotation check will use a fallback)
+				GinkgoLogr.Info("WORKAROUND: NAD exists - operator created it (basic check only)",
+					"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed, "retries", retryCount)
+				// Give it a moment to be fully visible
+				time.Sleep(1 * time.Second)
+				return nil
+			}
 		}
 
 		// Check if we've exceeded timeout
@@ -3342,7 +4008,16 @@ func WORKAROUND_ensureNADExistsWithFallback(apiClient *clients.Settings, nadName
 				return fmt.Errorf("WORKAROUND: NAD creation failed both from operator and fallback: %w", err)
 			}
 
-			GinkgoLogr.Info("WORKAROUND: Successfully created NAD via fallback (manual creation with proper CNI config)",
+			// Verify the manually created NAD is visible and accessible
+			resourceName := sriovNetObj.Object.Spec.ResourceName
+			verifyErr := WORKAROUND_verifyNADVisible(apiClient, nadName, targetNamespace, resourceName)
+			if verifyErr != nil {
+				GinkgoLogr.Error(verifyErr, "WORKAROUND: NAD created but verification failed - webhook may not detect it",
+					"nadName", nadName, "namespace", targetNamespace)
+				return fmt.Errorf("WORKAROUND: NAD created but verification failed: %w", verifyErr)
+			}
+
+			GinkgoLogr.Info("WORKAROUND: Successfully created and verified NAD via fallback (manual creation with proper CNI config)",
 				"nadName", nadName, "namespace", targetNamespace)
 			return nil
 		}
@@ -3408,11 +4083,19 @@ func WORKAROUND_createNADFromSriovNetwork(apiClient *clients.Settings, nadName, 
 	nadBuilder.Definition.Spec.Config = cniConfig
 
 	// Add labels to indicate this was created by workaround
+	// These labels help the network-resources-injector webhook recognize the NAD
 	if nadBuilder.Definition.Labels == nil {
 		nadBuilder.Definition.Labels = make(map[string]string)
 	}
 	nadBuilder.Definition.Labels["sriov-network-operator.openshift.io/workaround"] = "true"
 	nadBuilder.Definition.Labels["sriov-network-operator.openshift.io/sriov-network"] = sriovNetObj.Name
+
+	// Add annotations that the operator would normally add
+	// This helps the webhook properly identify and process the NAD
+	if nadBuilder.Definition.Annotations == nil {
+		nadBuilder.Definition.Annotations = make(map[string]string)
+	}
+	nadBuilder.Definition.Annotations["k8s.v1.cni.cncf.io/resourceName"] = fmt.Sprintf("openshift.io/%s", spec.ResourceName)
 
 	_, err = nadBuilder.Create()
 	if err != nil {
@@ -3425,6 +4108,14 @@ func WORKAROUND_createNADFromSriovNetwork(apiClient *clients.Settings, nadName, 
 		"nadName", nadName, "namespace", targetNamespace,
 		"resourceName", spec.ResourceName,
 		"note", "This is a temporary workaround - remove when OCPBUGS-64886 is fixed")
+
+	// Verify NAD is visible and accessible (important for webhook to detect it)
+	err = WORKAROUND_verifyNADVisible(apiClient, nadName, targetNamespace, spec.ResourceName)
+	if err != nil {
+		GinkgoLogr.Error(err, "WORKAROUND: NAD created but verification failed - webhook may not detect it",
+			"nadName", nadName, "namespace", targetNamespace)
+		return fmt.Errorf("WORKAROUND: NAD created but verification failed: %w", err)
+	}
 
 	return nil
 }
@@ -3608,4 +4299,105 @@ func WORKAROUND_extractResourceNameFromNetworkName(networkName string) string {
 		return parts[len(parts)-1]
 	}
 	return "unknown"
+}
+
+// WORKAROUND_verifyNADVisible verifies that a NAD is visible and accessible, with correct structure
+// for the webhook to detect it. This helps prevent timing issues where the NAD exists but isn't
+// yet visible to the webhook.
+//
+// IMPORTANT: This is a WORKAROUND function and should be REMOVED when OCPBUGS-64886 is fixed.
+func WORKAROUND_verifyNADVisible(apiClient *clients.Settings, nadName, targetNamespace, expectedResourceName string) error {
+	GinkgoLogr.Info("WORKAROUND: Verifying NAD is visible and accessible for webhook",
+		"nadName", nadName, "namespace", targetNamespace, "expectedResourceName", expectedResourceName)
+
+	// Wait up to 30 seconds for NAD to be visible, checking every 500ms
+	// This accounts for eventual consistency in Kubernetes API
+	maxWait := 30 * time.Second
+	checkInterval := 500 * time.Millisecond
+	startTime := time.Now()
+
+	for {
+		elapsed := time.Since(startTime)
+		if elapsed > maxWait {
+			return fmt.Errorf("NAD verification timeout: NAD %s/%s not visible after %v", targetNamespace, nadName, maxWait)
+		}
+
+		// Pull NAD to verify it exists and is accessible
+		nadObj, err := nad.Pull(apiClient, nadName, targetNamespace)
+		if err != nil {
+			GinkgoLogr.Info("WORKAROUND: NAD not yet visible, waiting...",
+				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed, "error", err)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		if nadObj == nil || nadObj.Object == nil {
+			GinkgoLogr.Info("WORKAROUND: NAD object is nil, waiting...",
+				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// Verify annotation exists
+		annotations := nadObj.Object.GetAnnotations()
+		resourceNameAnno, hasAnno := annotations["k8s.v1.cni.cncf.io/resourceName"]
+		if !hasAnno || resourceNameAnno == "" {
+			GinkgoLogr.Info("WORKAROUND: NAD missing required annotation, waiting...",
+				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// Verify annotation matches expected resource name
+		expectedAnnoValue := fmt.Sprintf("openshift.io/%s", expectedResourceName)
+		if resourceNameAnno != expectedAnnoValue {
+			GinkgoLogr.Info("WORKAROUND: NAD annotation mismatch, waiting...",
+				"nadName", nadName, "namespace", targetNamespace,
+				"expected", expectedAnnoValue, "actual", resourceNameAnno, "elapsed", elapsed)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// Verify CNI config exists and is valid JSON
+		configStr := nadObj.Object.Spec.Config
+		if configStr == "" {
+			GinkgoLogr.Info("WORKAROUND: NAD config is empty, waiting...",
+				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// Parse CNI config to verify it's valid JSON and has resourceName
+		var cniConfig map[string]interface{}
+		if err := json.Unmarshal([]byte(configStr), &cniConfig); err != nil {
+			GinkgoLogr.Info("WORKAROUND: NAD config is not valid JSON, waiting...",
+				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed, "error", err)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// Verify CNI config has resourceName
+		cniResourceName, hasCNIResourceName := cniConfig["resourceName"].(string)
+		if !hasCNIResourceName || cniResourceName == "" {
+			GinkgoLogr.Info("WORKAROUND: NAD CNI config missing resourceName, waiting...",
+				"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// Verify CNI config resourceName matches annotation
+		if cniResourceName != expectedAnnoValue {
+			GinkgoLogr.Info("WORKAROUND: NAD CNI config resourceName mismatch, waiting...",
+				"nadName", nadName, "namespace", targetNamespace,
+				"expected", expectedAnnoValue, "actual", cniResourceName, "elapsed", elapsed)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// All checks passed - NAD is visible and correctly configured
+		GinkgoLogr.Info("WORKAROUND: NAD verified and visible for webhook",
+			"nadName", nadName, "namespace", targetNamespace,
+			"resourceName", expectedResourceName, "elapsed", elapsed)
+		return nil
+	}
 }
