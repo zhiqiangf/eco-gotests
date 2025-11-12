@@ -374,6 +374,42 @@ The IPv6 and dual-stack networking tests have additional requirements:
 
 The tests include comprehensive stability checks before starting test execution:
 
+### Automatic Cluster Health Check
+
+**✨ New:** Before running any tests, the suite automatically runs a comprehensive cluster health check to ensure the cluster is ready for SR-IOV testing. This check runs in `BeforeSuite` and validates:
+
+**Critical Checks (Must Pass):**
+- ✅ Kubernetes API server responsiveness
+- ✅ All nodes in Ready state
+- ✅ All SR-IOV operator pods running (not just one)
+- ✅ Multus CNI deployed and operational
+- ✅ OLM operator running
+
+**Important Checks:**
+- ✅ Machine Config Pools stable and updated
+- ✅ SR-IOV CSV in Succeeded phase
+- ✅ SR-IOV policies and networks configured
+
+**Informational Checks:**
+- ✅ No orphaned test namespaces (important for test isolation)
+- ✅ Sufficient cluster resources
+- ✅ Kubernetes version compatibility
+
+**Benefits:**
+- **Fails Fast:** Tests won't start if the cluster isn't ready, saving time
+- **Better Diagnostics:** Comprehensive health report identifies issues before test execution
+- **Test Isolation:** Detects leftover resources from previous runs that could cause conflicts
+- **Dependency Validation:** Ensures all required components (Multus, OLM) are operational
+
+**Skipping the Health Check:**
+If you need to skip the automatic health check (not recommended), set:
+```bash
+export SKIP_HEALTH_CHECK=true
+go test ./tests/sriov/...
+```
+
+**Note:** The health check uses the `cluster_health_check.sh` script. If the script is not found, the check is skipped with a warning message.
+
 ### SR-IOV Operator Readiness
 - Verifies SR-IOV operator pods are running in the operator namespace
 - Confirms SR-IOV CRDs are available by checking `SriovNetwork` resources
@@ -406,12 +442,16 @@ These checks ensure tests only execute when the cluster is in a stable state and
 
 ## Running the Tests
 
+**Note:** Before tests start, a comprehensive cluster health check runs automatically. This ensures the cluster is ready for testing. If the health check fails, tests will not execute. See [Automatic Cluster Health Check](#automatic-cluster-health-check) for details.
+
 ### Basic test execution:
 ```bash
 export GOSUMDB=sum.golang.org
 export GOTOOLCHAIN=auto
 go test ./tests/sriov/... -v
 ```
+
+**Note:** The health check runs automatically in `BeforeSuite`. To skip it (not recommended), set `SKIP_HEALTH_CHECK=true`.
 
 ### Running only basic tests:
 ```bash
@@ -794,7 +834,10 @@ The logging system is integrated throughout the test lifecycle:
 
 ### Cluster Health Check Script
 
-A comprehensive cluster health verification script is available to ensure the SR-IOV test environment is ready:
+A comprehensive cluster health verification script is available to ensure the SR-IOV test environment is ready. **The health check now runs automatically before tests start** (see [Automatic Cluster Health Check](#automatic-cluster-health-check) above).
+
+**Manual Execution:**
+You can also run the health check manually at any time:
 
 ```bash
 # Basic health check
@@ -816,6 +859,13 @@ A comprehensive cluster health verification script is available to ensure the SR
 - Multiple output formats (text, JSON, HTML)
 - Pass/fail/warning indicators
 - Exit codes for CI/CD integration
+- **Automatically integrated** into test suite `BeforeSuite`
+
+**Integration:**
+- The health check runs automatically in `BeforeSuite` before any tests execute
+- If the health check fails, tests will not start (fail fast)
+- Health check output is logged to test logs for diagnostics
+- Can be skipped with `SKIP_HEALTH_CHECK=true` environment variable
 
 See `CLUSTER_HEALTH_CHECK_USAGE.md` for detailed documentation.
 

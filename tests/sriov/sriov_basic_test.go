@@ -121,6 +121,10 @@ func TestSriovBasic(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
+	By("Running comprehensive cluster health check")
+	err := runClusterHealthCheck()
+	Expect(err).ToNot(HaveOccurred(), "Cluster health check failed - cluster may not be ready for testing")
+
 	By("Cleaning up leftover resources from previous test runs")
 	cleanupLeftoverResources(getAPIClient(), NetConfig.SriovOperatorNamespace)
 
@@ -130,7 +134,7 @@ var _ = BeforeSuite(func() {
 	for key, value := range params.PrivilegedNSLabels {
 		getTestNS().WithLabel(key, value)
 	}
-	_, err := getTestNS().Create()
+	_, err = getTestNS().Create()
 	Expect(err).ToNot(HaveOccurred(), "error to create test namespace")
 
 	By("Verifying if sriov tests can be executed on given cluster")

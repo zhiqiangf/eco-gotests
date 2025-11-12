@@ -28,6 +28,7 @@ import (
 	multus "gopkg.in/k8snetworkplumbingwg/multus-cni.v4/pkg/types"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -870,7 +871,21 @@ func cleanupConflictingPolicies(apiClient *clients.Settings, sriovOperatorNamesp
 	if err != nil {
 		GinkgoLogr.Info("Device plugin configmap update check completed with warning",
 			"conflictingPolicies", conflictingPolicies, "error", err,
-			"hint", "Configmap may update later. Test will continue.")
+			"hint", "Operator did not clean up ConfigMap. Attempting manual cleanup workaround for OCPBUGS-65507.")
+
+		// WORKAROUND for OCPBUGS-65507: Manually remove stale policies from ConfigMap
+		// The operator should clean up ConfigMap on policy deletion but doesn't (bug)
+		// This workaround manually edits the ConfigMap to remove stale entries
+		workaroundErr := WORKAROUND_manuallyCleanupConfigMap(apiClient, sriovOperatorNamespace, conflictingPolicies)
+		if workaroundErr != nil {
+			GinkgoLogr.Info("Manual ConfigMap cleanup workaround failed (continuing anyway)",
+				"conflictingPolicies", conflictingPolicies, "error", workaroundErr,
+				"hint", "Test may fail if stale policies prevent VF allocation.")
+		} else {
+			GinkgoLogr.Info("Manual ConfigMap cleanup workaround succeeded",
+				"conflictingPolicies", conflictingPolicies,
+				"note", "Stale policies removed from ConfigMap. Device plugin will restart to pick up changes.")
+		}
 	}
 
 	return nil
@@ -948,6 +963,134 @@ func waitForDevicePluginConfigmapUpdate(apiClient *clients.Settings, sriovOperat
 
 		time.Sleep(checkInterval)
 	}
+}
+
+// WORKAROUND_manuallyCleanupConfigMap manually removes stale policy entries from the device-plugin-config ConfigMap
+// This is a workaround for OCPBUGS-65507 where the operator does not clean up ConfigMap entries when policies are deleted
+//
+// IMPORTANT: This is a WORKAROUND function and should be REMOVED when OCPBUGS-65507 is fixed.
+func WORKAROUND_manuallyCleanupConfigMap(apiClient *clients.Settings, sriovOperatorNamespace string, stalePolicyNames []string) error {
+	GinkgoLogr.Info("WORKAROUND: Manually cleaning up stale policies from ConfigMap (OCPBUGS-65507 workaround)",
+		"stalePolicies", stalePolicyNames, "configmap", "device-plugin-config")
+
+	// Pull the ConfigMap
+	configMapBuilder, err := configmap.Pull(apiClient, "device-plugin-config", sriovOperatorNamespace)
+	if err != nil {
+		return fmt.Errorf("failed to pull device-plugin-config ConfigMap: %w", err)
+	}
+
+	if configMapBuilder == nil || configMapBuilder.Object == nil {
+		return fmt.Errorf("ConfigMap object is nil")
+	}
+
+	// Track if we made any changes to the ConfigMap
+	configUpdated := false
+
+	// Process each node-specific key in the ConfigMap
+	for nodeKey, configJSON := range configMapBuilder.Object.Data {
+		// Skip empty or null resource lists
+		if configJSON == "" || configJSON == "null" {
+			continue
+		}
+
+		// Parse the JSON config
+		var config struct {
+			ResourceList []struct {
+				ResourceName string                 `json:"resourceName"`
+				Selectors    map[string]interface{} `json:"selectors"`
+			} `json:"resourceList"`
+		}
+
+		if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
+			GinkgoLogr.Info("WORKAROUND: Failed to parse ConfigMap JSON for node, skipping",
+				"node", nodeKey, "error", err)
+			continue
+		}
+
+		// Filter out stale policies
+		filteredResourceList := []struct {
+			ResourceName string                 `json:"resourceName"`
+			Selectors    map[string]interface{} `json:"selectors"`
+		}{}
+
+		nodeConfigUpdated := false
+		for _, resource := range config.ResourceList {
+			isStale := false
+			for _, stalePolicy := range stalePolicyNames {
+				if resource.ResourceName == stalePolicy {
+					isStale = true
+					GinkgoLogr.Info("WORKAROUND: Removing stale policy from ConfigMap",
+						"stalePolicy", stalePolicy, "node", nodeKey)
+					nodeConfigUpdated = true
+					configUpdated = true
+					break
+				}
+			}
+
+			if !isStale {
+				filteredResourceList = append(filteredResourceList, resource)
+			}
+		}
+
+		// If we removed any policies for this node, update the ConfigMap data
+		if nodeConfigUpdated {
+			// Create updated config structure
+			updatedConfig := struct {
+				ResourceList []struct {
+					ResourceName string                 `json:"resourceName"`
+					Selectors    map[string]interface{} `json:"selectors"`
+				} `json:"resourceList"`
+			}{
+				ResourceList: filteredResourceList,
+			}
+
+			// Marshal back to JSON
+			updatedJSON, err := json.Marshal(updatedConfig)
+			if err != nil {
+				GinkgoLogr.Info("WORKAROUND: Failed to marshal updated ConfigMap JSON for node",
+					"node", nodeKey, "error", err)
+				continue
+			}
+
+			// Update the ConfigMap data
+			if configMapBuilder.Object.Data == nil {
+				configMapBuilder.Object.Data = make(map[string]string)
+			}
+			configMapBuilder.Object.Data[nodeKey] = string(updatedJSON)
+		}
+	}
+
+	// If we made changes, update the ConfigMap
+	if configUpdated {
+		GinkgoLogr.Info("WORKAROUND: Updating ConfigMap to remove stale policies",
+			"stalePolicies", stalePolicyNames)
+
+		_, err = configMapBuilder.Update()
+		if err != nil {
+			return fmt.Errorf("failed to update ConfigMap: %w", err)
+		}
+
+		GinkgoLogr.Info("WORKAROUND: ConfigMap updated successfully, restarting device plugin pod",
+			"stalePolicies", stalePolicyNames)
+
+		// Restart device plugin pod to force it to re-read the ConfigMap
+		// This ensures the stale policy entries are no longer served
+		err = restartDevicePluginPod(apiClient, sriovOperatorNamespace)
+		if err != nil {
+			GinkgoLogr.Info("WORKAROUND: Failed to restart device plugin pod after ConfigMap cleanup",
+				"error", err, "note", "Device plugin may need manual restart to pick up changes")
+			// Don't fail the workaround if restart fails - the ConfigMap is updated
+		} else {
+			GinkgoLogr.Info("WORKAROUND: Device plugin pod restarted successfully",
+				"note", "Device plugin will re-read ConfigMap and stop serving stale policies")
+		}
+
+		return nil
+	}
+
+	GinkgoLogr.Info("WORKAROUND: No stale policies found in ConfigMap (may have been cleaned up already)",
+		"stalePolicies", stalePolicyNames)
+	return nil
 }
 
 // initVF initializes VF for the given device
@@ -2955,9 +3098,56 @@ func validateOperatorPodsRemoved(apiClient *clients.Settings, namespace string, 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	// Operator pod name patterns and labels to identify operator-related pods
+	operatorPodLabels := map[string]string{
+		"app": "sriov-network-operator",
+	}
+	operatorPodNamePrefixes := []string{
+		"sriov-network-operator-",
+		"network-resources-injector-",
+	}
+
 	err := wait.PollUntilContextCancel(ctx, 10*time.Second, false, func(ctx context.Context) (bool, error) {
+		// Check pods by labels first (most reliable)
 		podList := &corev1.PodList{}
 		err := apiClient.Client.List(ctx, podList, &client.ListOptions{
+			Namespace:     namespace,
+			LabelSelector: labels.SelectorFromSet(operatorPodLabels),
+		})
+		if err != nil {
+			GinkgoLogr.Info("Error listing pods with operator label", "error", err)
+		} else {
+			for _, pod := range podList.Items {
+				if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
+					GinkgoLogr.Info("Found operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase, "label", "app=sriov-network-operator")
+					return false, nil
+				}
+			}
+		}
+
+		// Also check network-resources-injector pods
+		injectorLabels := map[string]string{
+			"app": "network-resources-injector",
+		}
+		podList = &corev1.PodList{}
+		err = apiClient.Client.List(ctx, podList, &client.ListOptions{
+			Namespace:     namespace,
+			LabelSelector: labels.SelectorFromSet(injectorLabels),
+		})
+		if err != nil {
+			GinkgoLogr.Info("Error listing pods with injector label", "error", err)
+		} else {
+			for _, pod := range podList.Items {
+				if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
+					GinkgoLogr.Info("Found operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase, "label", "app=network-resources-injector")
+					return false, nil
+				}
+			}
+		}
+
+		// Also check by name patterns as fallback (in case labels are missing)
+		podList = &corev1.PodList{}
+		err = apiClient.Client.List(ctx, podList, &client.ListOptions{
 			Namespace: namespace,
 		})
 		if err != nil {
@@ -2965,16 +3155,26 @@ func validateOperatorPodsRemoved(apiClient *clients.Settings, namespace string, 
 			return false, nil
 		}
 
-		runningPods := 0
+		runningOperatorPods := 0
 		for _, pod := range podList.Items {
-			if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
-				runningPods++
+			// Check if this is an operator pod by name pattern
+			isOperatorPod := false
+			for _, prefix := range operatorPodNamePrefixes {
+				if strings.HasPrefix(pod.Name, prefix) {
+					isOperatorPod = true
+					break
+				}
+			}
+
+			// Only check operator pods, ignore test pods
+			if isOperatorPod && (pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending) {
+				runningOperatorPods++
 				GinkgoLogr.Info("Found operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase)
 			}
 		}
 
-		if runningPods > 0 {
-			GinkgoLogr.Info("Waiting for operator pods to terminate", "runningPods", runningPods)
+		if runningOperatorPods > 0 {
+			GinkgoLogr.Info("Waiting for operator pods to terminate", "runningOperatorPods", runningOperatorPods)
 			return false, nil
 		}
 
@@ -3652,6 +3852,117 @@ func runCommand(name string, args ...string) error {
 		return fmt.Errorf("command failed: %s %v: %w", name, args, err)
 	}
 
+	return nil
+}
+
+// runClusterHealthCheck runs the cluster health check script to verify cluster readiness
+// This is more comprehensive than IsSriovDeployed() as it checks:
+// - All operator pods (not just one)
+// - Multus CNI
+// - OLM operator
+// - Machine Config Pools
+// - CSV status
+// - Orphaned test namespaces
+// - And more...
+//
+// The health check can be skipped by setting SKIP_HEALTH_CHECK=true environment variable
+func runClusterHealthCheck() error {
+	// Check if health check should be skipped
+	if os.Getenv("SKIP_HEALTH_CHECK") == "true" {
+		GinkgoLogr.Info("Skipping cluster health check (SKIP_HEALTH_CHECK=true)")
+		return nil
+	}
+
+	By("Running comprehensive cluster health check")
+	GinkgoLogr.Info("Starting cluster health check", "script", "cluster_health_check.sh")
+
+	// Get the script path (assumes it's in the same directory as the test files)
+	// Try multiple possible paths
+	possiblePaths := []string{
+		"tests/sriov/cluster_health_check.sh",
+		"./tests/sriov/cluster_health_check.sh",
+		"cluster_health_check.sh",
+		"./cluster_health_check.sh",
+	}
+
+	var scriptPath string
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			scriptPath = path
+			break
+		}
+	}
+
+	if scriptPath == "" {
+		GinkgoLogr.Info("Health check script not found in any expected location, skipping", "hint", "Set SKIP_HEALTH_CHECK=true to suppress this message")
+		return nil
+	}
+
+	// Run the health check script
+	// Exit code 0 = ready, 1 = not ready
+	cmd := exec.Command("bash", scriptPath)
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	err := cmd.Run()
+
+	// Log output
+	if outBuf.Len() > 0 {
+		GinkgoLogr.Info("Health check output", "output", outBuf.String())
+	}
+	if errBuf.Len() > 0 {
+		GinkgoLogr.Info("Health check error output", "stderr", errBuf.String())
+	}
+
+	// Health check script returns 0 if ready, 1 if not ready
+	if err != nil {
+		exitCode := 1
+		if exitError, ok := err.(*exec.ExitError); ok {
+			exitCode = exitError.ExitCode()
+		}
+
+		// Parse output to check if critical checks passed
+		outputStr := outBuf.String()
+		criticalChecksPassed := true
+		criticalFailures := []string{}
+
+		// Check for critical check failures in output
+		if strings.Contains(outputStr, "❌") || strings.Contains(outputStr, "[FAILED]") {
+			// Check each critical component
+			if strings.Contains(outputStr, "Kubernetes API not responsive") {
+				criticalChecksPassed = false
+				criticalFailures = append(criticalFailures, "API server not responsive")
+			}
+			if strings.Contains(outputStr, "Not all nodes Ready") {
+				criticalChecksPassed = false
+				criticalFailures = append(criticalFailures, "Nodes not ready")
+			}
+			if strings.Contains(outputStr, "Not all SR-IOV pods Running") {
+				criticalChecksPassed = false
+				criticalFailures = append(criticalFailures, "SR-IOV operator pods not running")
+			}
+			if strings.Contains(outputStr, "Multus CNI not deployed") {
+				criticalChecksPassed = false
+				criticalFailures = append(criticalFailures, "Multus CNI not deployed")
+			}
+			if strings.Contains(outputStr, "OLM operator not running") {
+				criticalChecksPassed = false
+				criticalFailures = append(criticalFailures, "OLM operator not running")
+			}
+		}
+
+		// Only fail if critical checks failed
+		if !criticalChecksPassed {
+			return fmt.Errorf("cluster health check failed - critical issues detected: %v. Review output above for details. To skip this check, set SKIP_HEALTH_CHECK=true", criticalFailures)
+		}
+
+		// If only warnings/informational checks failed, log but don't fail
+		GinkgoLogr.Info("Cluster health check completed with warnings (non-critical)", "exitCode", exitCode, "note", "Tests will proceed, but review warnings above")
+		return nil
+	}
+
+	GinkgoLogr.Info("Cluster health check passed - cluster is ready for testing")
 	return nil
 }
 
