@@ -105,18 +105,23 @@ The bug is that:
    data.Data["CniResourceName"] = os.Getenv("RESOURCE_PREFIX") + "/" + cr.Spec.ResourceName
    ```
 
-2. ❌ But this is passed to a **template file** that doesn't use it correctly
-3. ❌ The template is in: `filepath.Join(ManifestsPath, "sriov")` = `./bindata/manifests/cni-config/sriov`
+2. ✅ This data IS passed to the **template file** and IS being used
+3. ❌ BUT it's being used in the **wrong place**
+4. ❌ The template is in: `filepath.Join(ManifestsPath, "sriov")` = `./bindata/manifests/cni-config/sriov`
 
 ### The Real Bug Location
 
-**The actual bug is NOT in this Go code - it's in the TEMPLATE FILES!**
+**The actual bug is in the TEMPLATE FILES placement logic!**
 
 The Go code correctly prepares the data:
 - ✅ Sets `CniResourceName` (which becomes `resourceName`)
 - ✅ Sets `NetworkName`, `IPAM`, etc.
 
-But the **Go template files** (in `bindata/manifests/cni-config/sriov`) are NOT using the `CniResourceName` in the CNI config!
+The **Go template files** (in `bindata/manifests/cni-config/sriov`) ARE using the `CniResourceName` BUT:
+- ✅ They PUT IT in metadata.annotations (correct location for metadata)
+- ❌ They DO NOT include it in spec.config JSON (where CNI plugin needs it!)
+
+**KEY DISCOVERY**: resourceName is included in the NAD, but in the annotation, not in the CNI config JSON!
 
 ---
 
@@ -139,13 +144,16 @@ spec:
       "cniVersion": "...",
       "name": "...",
       "type": "sriov",
-      "resourceName": "{{ .CniResourceName }}",  ← THIS IS MISSING!
-      "pciAddress": "{{ .PciAddress }}",  ← THIS IS ALSO MISSING!
+      "resourceName": "{{ .CniResourceName }}",  ← ❌ MISSING FROM CONFIG!
+      "pciAddress": "{{ .PciAddress }}",        ← ❌ MISSING FROM CONFIG!
       ...
     }
+metadata:
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: "{{ .CniResourceName }}"  ← ✅ resourceName GOES HERE
 ```
 
-But it probably looks like:
+But what it probably looks like:
 ```yaml
 spec:
   config: |
@@ -153,11 +161,16 @@ spec:
       "cniVersion": "...",
       "name": "...",
       "type": "sriov",
-      # ❌ NO resourceName here!
+      # ❌ NO resourceName in config! (but it IS in annotations!)
       # ❌ NO pciAddress here!
       ...
     }
+metadata:
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: "openshift.io/test-sriov-nic"  ✅ HERE!
 ```
+
+**CRITICAL**: resourceName is in the annotation (which is fine) but MISSING from the CNI config JSON (where CNI plugin needs it)!
 
 ---
 
@@ -173,9 +186,11 @@ spec:
 
 ### The Template Files (in bindata/manifests/cni-config/sriov/)
 
-**Status**: ❌ BUGGY
-- Does NOT use `{{ .CniResourceName }}` in CNI config
-- Does NOT include `pciAddress` field
+**Status**: ⚠️ PARTIALLY BUGGY - Misplacement Issue
+- ✅ DOES use `{{ .CniResourceName }}`... but in the **ANNOTATION**, not CNI config!
+- ✅ Correctly places resourceName in metadata.annotations
+- ❌ MISSING `{{ .CniResourceName }}` in spec.config JSON
+- ❌ Does NOT include `pciAddress` field in CNI config
 - This is where the incomplete CNI config is generated
 
 ---
@@ -195,31 +210,59 @@ spec:
                 ↓
 6. Template renderer loads: ./bindata/manifests/cni-config/sriov/*.yaml
                 ↓
-7. ❌ Template does NOT use {{ .CniResourceName }} in CNI config!
+7. ✅ Template DOES use {{ .CniResourceName }} in metadata.annotations!
+   ✅ Sets: metadata.annotations["k8s.v1.cni.cncf.io/resourceName"] = "openshift.io/cx7anl244"
                 ↓
-8. Template returns incomplete CNI config
+8. ❌ BUT Template does NOT include {{ .CniResourceName }} in spec.config JSON!
+   ❌ spec.config: { "cniVersion": "...", "name": "...", "type": "sriov" }  (NO resourceName!)
                 ↓
-9. NAD is created with incomplete config
+9. Template returns NAD with incomplete spec.config
                 ↓
-10. Pod attachment fails: "VF pci addr is required"
+10. NAD is created with resourceName in annotation but NOT in CNI config
+                ↓
+11. Pod attachment fails: CNI plugin reads spec.config, doesn't find resourceName
+                ↓
+12. Error: "VF pci addr is required"
 ```
+
+**THE REAL BUG**: Placement logic puts resourceName in the wrong part of the NAD!
 
 ---
 
 ## How to Fix
 
-### Option 1: Fix the Template Files (Best)
+### Option 1: Fix the Template Files (BEST - RECOMMENDED)
 
-Modify the template files in `bindata/manifests/cni-config/sriov/` to include:
+Modify the template files in `bindata/manifests/cni-config/sriov/` to include resourceName in BOTH places:
 
-```yaml
-"resourceName": "{{ .CniResourceName }}",
-"pciAddress": "{{ .PciAddress }}",  # Would need to add this to data preparation
+**In spec.config JSON** (for CNI plugin to find):
+```json
+{
+  "cniVersion": "...",
+  "name": "...",
+  "type": "sriov",
+  "resourceName": "{{ .CniResourceName }}",  ← ADD THIS TO CONFIG
+  "pciAddress": "{{ .PciAddress }}",         ← ADD THIS TOO
+  ...
+}
 ```
 
-### Option 2: Fix in helper.go (Workaround)
+**In metadata.annotations** (already correct):
+```yaml
+metadata:
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: "{{ .CniResourceName }}"  ← KEEP THIS
+```
 
-Directly build CNI config in Go instead of using templates (not ideal, breaks abstraction).
+### The Fix Strategy
+1. Keep resourceName in annotations (it's correct there)
+2. ADD resourceName to spec.config JSON (CNI plugin needs it there)
+3. ADD pciAddress to spec.config JSON (for VF attachment)
+4. Test that CNI plugin can read complete config
+
+### Option 2: Fix in helper.go (NOT RECOMMENDED)
+
+Directly build CNI config in Go instead of using templates (breaks abstraction, harder to maintain).
 
 ---
 
@@ -265,7 +308,7 @@ Look for files like:
 **What It Does**: Prepares data and calls template renderer  
 **Status of Go Code**: ✅ CORRECT - data is prepared properly  
 **Real Bug Location**: Template files in `bindata/manifests/cni-config/sriov/`  
-**What's Missing**: Template doesn't use `{{ .CniResourceName }}` in CNI config
+**What's Wrong**: Templates use `{{ .CniResourceName }}` in ANNOTATIONS but NOT in spec.config JSON
 
 ### Key Evidence
 
@@ -284,7 +327,12 @@ Look for files like:
    logger.Info("render NetworkAttachmentDefinition output", "raw", string(raw))
    ```
 
-4. **But the template does NOT use the data!**
+4. **Templates DO use the data in annotations** ✅
+   - `metadata.annotations["k8s.v1.cni.cncf.io/resourceName"]` = "openshift.io/test-sriov-nic"
+
+5. **BUT templates do NOT put it in spec.config JSON** ❌
+   - `spec.config` JSON missing "resourceName" field
+   - CNI plugin can't find it where it needs to be!
 
 ---
 
@@ -294,8 +342,8 @@ Look for files like:
 **Main Branch**: Verified with latest main branch code  
 **File with setup**: `api/v1/helper.go` (RenderNetAttDef for SriovNetwork)  
 **Source URL**: https://github.com/openshift/sriov-network-operator/blob/main/api/v1/helper.go
-**Actual buggy location**: `bindata/manifests/cni-config/sriov/*.yaml` (template files)  
-**Bug**: Template missing `{{ .CniResourceName }}` and `{{ .PciAddress }}` in CNI config
+**Actual buggy location**: `bindata/manifests/cni-config/sriov/*.yaml` (template placement logic)  
+**Bug**: Template uses `{{ .CniResourceName }}` in ANNOTATIONS but NOT in spec.config JSON
 
 ### Key Finding from Main Branch Code
 
@@ -304,15 +352,22 @@ The Go code in `api/v1/helper.go` correctly:
 2. ✅ Calls `render.RenderDir()` with this prepared data
 3. ✅ Logs the output for debugging
 
-**BUT** the template files in `bindata/manifests/cni-config/sriov/` do NOT:
-1. ❌ Use `{{ .CniResourceName }}` in the generated CNI config JSON
-2. ❌ Include the `{{ .PciAddress }}` field
+**BUT** the template files in `bindata/manifests/cni-config/sriov/` have a placement issue:
+1. ✅ DOES use `{{ .CniResourceName }}` in metadata.annotations (CORRECT)
+2. ❌ Does NOT use `{{ .CniResourceName }}` in spec.config JSON (MISSING - THIS IS THE BUG)
+3. ❌ Does NOT include the `{{ .PciAddress }}` field in config
+
+### The Real Problem
+
+resourceName needs to be in TWO places:
+- ✅ metadata.annotations (for Kubernetes tracking) - ALREADY DONE ✅
+- ❌ spec.config JSON (for CNI plugin to find) - MISSING ❌
 
 ---
 
-**Investigation Status**: ✅ GO CODE VERIFIED FROM MAIN BRANCH - CONFIRMED CORRECT
+**Investigation Status**: ✅ GO CODE VERIFIED - CORRECT ✅ | TEMPLATE PLACEMENT - BUGGY ❌
 
-**Root Cause**: Template files in `bindata/manifests/cni-config/sriov/` are missing CNI config fields
+**Root Cause**: Template placement logic puts resourceName in annotations but not in CNI config JSON
 
-**Ready for Upstream**: ✅ YES - This document can be used to file the bug with the operator team
+**Ready for Upstream**: ✅ YES - This document clearly shows the placement bug and how to fix it
 

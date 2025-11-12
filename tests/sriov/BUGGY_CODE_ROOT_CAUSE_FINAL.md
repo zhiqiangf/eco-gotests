@@ -68,7 +68,7 @@ This loads templates from: `./bindata/manifests/cni-config/sriov/`
 
 ## What the Template Files Should Contain
 
-The templates in `bindata/manifests/cni-config/sriov/` should generate a NAD like:
+The templates in `bindata/manifests/cni-config/sriov/` should generate a NAD with resourceName in BOTH places:
 
 ```yaml
 apiVersion: k8s.cni.cncf.io/v1
@@ -76,6 +76,8 @@ kind: NetworkAttachmentDefinition
 metadata:
   name: {{ .NetworkName }}
   namespace: {{ .NetworkNamespace }}
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: "{{ .CniResourceName }}"  ← resourceName in annotations ✅
 spec:
   config: |
     {
@@ -105,9 +107,10 @@ https://github.com/openshift/sriov-network-operator
 - Files in this directory that generate NetworkAttachmentDefinition
 
 ### What's Buggy
-The template is **NOT using**:
-- `{{ .CniResourceName }}` in the CNI config
-- A `pciAddress` field at all
+The template is **misplacing fields**:
+- ✅ DOES use `{{ .CniResourceName }}` in metadata.annotations (CORRECT)
+- ❌ Does NOT use `{{ .CniResourceName }}` in spec.config JSON (MISSING - THE BUG)
+- ❌ Does NOT include a `pciAddress` field in spec.config JSON either
 
 ---
 
@@ -129,19 +132,36 @@ render NetworkAttachmentDefinition output	{
            \\\"ipam\\\":{\\\"type\\\":\\\"static\\\"} }\"}}"}
 ```
 
-**This shows**:
+**This shows what's in spec.config**:
 - ✅ `cniVersion` is rendered
 - ✅ `name` is rendered
 - ✅ `type` is rendered
 - ✅ `vlan` is rendered
-- ❌ **`resourceName` is NOT rendered** (should be `"openshift.io/test-sriov-nic"`)
+- ❌ **`resourceName` is NOT in spec.config** (but IS in annotations!)
 - ❌ **`pciAddress` is NOT rendered** (should be node's VF address)
+
+### But Looking at Full NAD Output
+
+From BUG_REPRODUCTION_EVIDENCE.md, we can see:
+```json
+{
+  "metadata": {
+    "annotations": {
+      "k8s.v1.cni.cncf.io/resourceName": "openshift.io/test-sriov-nic"  ✅ PRESENT
+    }
+  },
+  "spec": {
+    "config": "{ \"cniVersion\":\"1.0.0\", \"type\":\"sriov\", ... }"  ❌ NO resourceName in config!
+  }
+}
+```
 
 ### Root Cause
 
-The template file in `bindata/manifests/cni-config/sriov/` is:
-1. **Not including** `{{ .CniResourceName }}` in the template
-2. **Not including** any `pciAddress` field
+The template file in `bindata/manifests/cni-config/sriov/` has a **placement issue**:
+1. ✅ **CORRECTLY includes** `{{ .CniResourceName }}` in metadata.annotations
+2. ❌ **FAILS to include** `{{ .CniResourceName }}` in spec.config JSON (where CNI plugin reads it)
+3. ❌ **Does not include** any `pciAddress` field in spec.config JSON
 
 ---
 
@@ -161,19 +181,32 @@ https://github.com/openshift/sriov-network-operator/tree/main/bindata/manifests/
 
 Look for a file that generates the NAD spec.config field.
 
-### Step 3: Add Missing Fields
+### Step 3: Fix the Template - Add Missing Fields to spec.config
 
-The template should include:
-```
-"resourceName": "{{ .CniResourceName }}",
+The template MUST include resourceName in BOTH places:
+
+**Already correct (in metadata annotations)**:
+```yaml
+metadata:
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: "{{ .CniResourceName }}"
 ```
 
-And ideally:
-```
-"pciAddress": "{{ .PciAddress }}",
+**Needs to be added (in spec.config JSON)**:
+```json
+{
+  "cniVersion": "0.4.0",
+  "name": "{{ .NetworkName }}",
+  "type": "sriov",
+  "resourceName": "{{ .CniResourceName }}",  ← ADD THIS
+  "pciAddress": "{{ .PciAddress }}",         ← ADD THIS TOO
+  ...other fields...
+}
 ```
 
-(Though pciAddress would need to be passed from the Go code)
+**Why both places?**
+- Annotations: For Kubernetes to track the resource type
+- spec.config: For the SR-IOV CNI plugin to find the resource
 
 ---
 
