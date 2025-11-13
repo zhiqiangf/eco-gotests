@@ -353,10 +353,10 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		// Use timestamp suffix to avoid namespace collision from previous test runs (fixes race condition in namespace termination)
 		timestamp := fmt.Sprintf("%d", time.Now().Unix())
 		testNamespace = "e2e-lifecycle-depend-" + testDeviceConfig.Name + "-" + timestamp
-		testNetworkName = "lifecycle-depend-net-" + testDeviceConfig.Name
+		testNetworkName = "lifecycle_depend_net_" + testDeviceConfig.Name
 		testPolicyName = testDeviceConfig.Name
-		newPolicyName = "new-policy-" + testDeviceConfig.Name
-		newNetworkName = "new-network-" + testDeviceConfig.Name
+		newPolicyName = "new_policy_" + testDeviceConfig.Name
+		newNetworkName = "new_network_" + testDeviceConfig.Name
 
 		// Create namespace for test
 		nsBuilder := namespace.NewBuilder(getAPIClient(), testNamespace)
