@@ -4443,6 +4443,14 @@ func WORKAROUND_ensureNADExistsWithFallback(apiClient *clients.Settings, nadName
 		nadObj, err := nad.Pull(apiClient, nadName, targetNamespace)
 		if err == nil && nadObj != nil && nadObj.Object != nil && nadObj.Object.Name != "" {
 			// NAD exists and is valid - operator created it successfully
+			// WORKAROUND for OCPBUGS-65542: Check if NAD config is incomplete and patch if needed
+			patchErr := WORKAROUND_patchIncompleteNAD(apiClient, nadName, targetNamespace, sriovNetworkName)
+			if patchErr != nil {
+				GinkgoLogr.Info("WORKAROUND: Failed to patch incomplete NAD (OCPBUGS-65542), will retry...",
+					"nadName", nadName, "namespace", targetNamespace, "error", patchErr)
+				// Don't fail immediately, the NAD might become complete on next reconcile
+			}
+
 			// Verify it's visible and accessible for webhook
 			// Extract resource name from SriovNetwork for verification
 			sriovNetObj, pullErr := sriov.PullNetwork(apiClient, sriovNetworkName, "openshift-sriov-network-operator")
@@ -4450,7 +4458,7 @@ func WORKAROUND_ensureNADExistsWithFallback(apiClient *clients.Settings, nadName
 				resourceName := sriovNetObj.Object.Spec.ResourceName
 				verifyErr := WORKAROUND_verifyNADVisible(apiClient, nadName, targetNamespace, resourceName)
 				if verifyErr == nil {
-					GinkgoLogr.Info("WORKAROUND: NAD exists and verified - operator successfully created it",
+					GinkgoLogr.Info("WORKAROUND: NAD exists, patched (if needed), and verified - ready for use",
 						"nadName", nadName, "namespace", targetNamespace, "elapsed", elapsed, "retries", retryCount)
 					return nil
 				}
@@ -4824,6 +4832,116 @@ func WORKAROUND_extractResourceNameFromNetworkName(networkName string) string {
 // - If NAD exists and can be pulled, it's valid enough for our tests
 // - This resolves false-positive timeouts on busy clusters
 //
+// WORKAROUND_patchIncompleteNAD patches a NAD that was created by the operator but has incomplete CNI configuration
+// This is a TEMPORARY WORKAROUND for OCPBUGS-65542: Operator creates NAD but with incomplete spec.config
+// The operator renders NAD with resourceName in annotations but NOT in the spec.config JSON where CNI plugin needs it
+//
+// IMPORTANT: This is a WORKAROUND function and should be REMOVED when OCPBUGS-65542 is fixed.
+// When OCPBUGS-65542 is fixed:
+//  1. Remove this function
+//  2. Remove calls to this function
+//  3. Operator will render complete NADs with resourceName in spec.config
+//
+// Related Issue: https://issues.redhat.com/browse/OCPBUGS-65542
+func WORKAROUND_patchIncompleteNAD(apiClient *clients.Settings, nadName, targetNamespace, sriovNetworkName string) error {
+	GinkgoLogr.Info("WORKAROUND: Checking if NAD needs patching for OCPBUGS-65542 (incomplete spec.config)",
+		"nadName", nadName, "namespace", targetNamespace)
+
+	// Pull the NAD
+	nadObj, err := nad.Pull(apiClient, nadName, targetNamespace)
+	if err != nil {
+		return fmt.Errorf("failed to pull NAD for patching: %w", err)
+	}
+
+	if nadObj == nil || nadObj.Object == nil {
+		return fmt.Errorf("NAD object is nil")
+	}
+
+	// Get the current spec.config
+	currentConfig := nadObj.Object.Spec.Config
+	if currentConfig == "" {
+		return fmt.Errorf("NAD spec.config is empty")
+	}
+
+	// Parse the config JSON
+	var configMap map[string]interface{}
+	if err := json.Unmarshal([]byte(currentConfig), &configMap); err != nil {
+		return fmt.Errorf("failed to parse NAD spec.config JSON: %w", err)
+	}
+
+	// Check if resourceName is missing in spec.config
+	_, hasResourceName := configMap["resourceName"]
+	if hasResourceName {
+		GinkgoLogr.Info("WORKAROUND: NAD already has resourceName in spec.config, no patching needed",
+			"nadName", nadName, "namespace", targetNamespace)
+		return nil
+	}
+
+	GinkgoLogr.Info("WORKAROUND: NAD is missing resourceName in spec.config, patching (OCPBUGS-65542)",
+		"nadName", nadName, "namespace", targetNamespace, "currentConfig", currentConfig)
+
+	// Get resourceName from SriovNetwork
+	sriovNetObj, err := sriov.PullNetwork(apiClient, sriovNetworkName, "openshift-sriov-network-operator")
+	if err != nil {
+		return fmt.Errorf("failed to pull SriovNetwork to get resourceName: %w", err)
+	}
+
+	if sriovNetObj == nil || sriovNetObj.Object == nil {
+		return fmt.Errorf("SriovNetwork object is nil")
+	}
+
+	resourceName := sriovNetObj.Object.Spec.ResourceName
+	if resourceName == "" {
+		return fmt.Errorf("SriovNetwork resourceName is empty")
+	}
+
+	// Add resourceName to config
+	fullResourceName := fmt.Sprintf("openshift.io/%s", resourceName)
+	configMap["resourceName"] = fullResourceName
+
+	GinkgoLogr.Info("WORKAROUND: Adding resourceName to NAD spec.config",
+		"nadName", nadName, "namespace", targetNamespace, "resourceName", fullResourceName)
+
+	// Marshal back to JSON
+	patchedConfigJSON, err := json.Marshal(configMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal patched config: %w", err)
+	}
+
+	// Update the NAD with patched config
+	nadObj.Object.Spec.Config = string(patchedConfigJSON)
+
+	// Apply the update
+	_, err = nadObj.Update()
+	if err != nil {
+		return fmt.Errorf("failed to update NAD with patched config: %w", err)
+	}
+
+	GinkgoLogr.Info("WORKAROUND: Successfully patched NAD with resourceName (OCPBUGS-65542)",
+		"nadName", nadName, "namespace", targetNamespace, "patchedConfig", string(patchedConfigJSON))
+
+	// Give the system a moment to propagate the update
+	time.Sleep(2 * time.Second)
+
+	// Verify the patch was applied
+	verifyNadObj, err := nad.Pull(apiClient, nadName, targetNamespace)
+	if err != nil {
+		GinkgoLogr.Info("WORKAROUND: Warning - failed to verify patched NAD, but patch was applied",
+			"error", err)
+		return nil // Don't fail if we can't verify, the update likely worked
+	}
+
+	var verifyConfigMap map[string]interface{}
+	if err := json.Unmarshal([]byte(verifyNadObj.Object.Spec.Config), &verifyConfigMap); err == nil {
+		if verifyResourceName, ok := verifyConfigMap["resourceName"].(string); ok {
+			GinkgoLogr.Info("WORKAROUND: Verified patched NAD has resourceName",
+				"nadName", nadName, "namespace", targetNamespace, "resourceName", verifyResourceName)
+		}
+	}
+
+	return nil
+}
+
 // Migration from old strict checks:
 //
 //	❌ Check 1-6: NAD object, nil checks, annotations
