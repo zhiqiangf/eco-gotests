@@ -2257,11 +2257,21 @@ func cleanupLeftoverResources(apiClient *clients.Settings, sriovOperatorNamespac
 		GinkgoLogr.Info("Failed to list SriovNetworkNodePolicies for cleanup", "error", err)
 	} else {
 		for _, policy := range sriovPolicies {
+			// Add nil checks to prevent panic
+			if policy == nil || policy.Object == nil {
+				GinkgoLogr.Info("Skipping nil policy object during cleanup")
+				continue
+			}
+
 			policyName := policy.Object.Name
 			// Skip the default policy - it should never be deleted
 			if policyName == "default" {
 				continue
 			}
+
+			// Store ResourceName before deletion to avoid accessing it after object might be modified
+			// Spec is a struct (not a pointer), so we can access it directly after checking Object is not nil
+			resourceName := policy.Object.Spec.ResourceName
 
 			// Clean up policies that look like test policies or might conflict
 			// This includes policies with test-like names (e.g., "testcve")
@@ -2275,7 +2285,7 @@ func cleanupLeftoverResources(apiClient *clients.Settings, sriovOperatorNamespac
 
 			if shouldCleanup {
 				GinkgoLogr.Info("Removing leftover SR-IOV policy that might conflict",
-					"policy", policyName, "resourceName", policy.Object.Spec.ResourceName)
+					"policy", policyName, "resourceName", resourceName)
 
 				err := policy.Delete()
 				if err != nil {
@@ -2285,14 +2295,19 @@ func cleanupLeftoverResources(apiClient *clients.Settings, sriovOperatorNamespac
 					// Wait for policy deletion to propagate and device plugin to restart/reconcile
 					// The device plugin needs to restart to release VFs allocated to deleted policies
 					GinkgoLogr.Info("Waiting for device plugin to reconcile after policy deletion",
-						"policy", policyName, "resourceName", policy.Object.Spec.ResourceName)
+						"policy", policyName, "resourceName", resourceName)
 
 					// Wait for device plugin to restart or for VF resources to be released
-					err = waitForDevicePluginReconcile(apiClient, sriovOperatorNamespace, policy.Object.Spec.ResourceName, 2*time.Minute)
-					if err != nil {
-						GinkgoLogr.Info("Device plugin reconciliation check completed with warning",
-							"policy", policyName, "resourceName", policy.Object.Spec.ResourceName, "error", err)
-						// Continue anyway - the device plugin may reconcile later
+					if resourceName != "" {
+						err = waitForDevicePluginReconcile(apiClient, sriovOperatorNamespace, resourceName, 2*time.Minute)
+						if err != nil {
+							GinkgoLogr.Info("Device plugin reconciliation check completed with warning",
+								"policy", policyName, "resourceName", resourceName, "error", err)
+							// Continue anyway - the device plugin may reconcile later
+						}
+					} else {
+						GinkgoLogr.Info("Skipping device plugin reconciliation - resourceName not available",
+							"policy", policyName)
 					}
 				}
 			}
@@ -3260,9 +3275,63 @@ func validateAllComponentsRemoved(apiClient *clients.Settings, namespace string,
 	return nil
 }
 
+// isRateLimiterError checks if an error is a rate limiter or context deadline error
+// that should be retried rather than causing the poll to fail
+func isRateLimiterError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "rate limiter") ||
+		strings.Contains(errStr, "context deadline exceeded") ||
+		strings.Contains(errStr, "deadline exceeded")
+}
+
+// listPodsWithRetry attempts to list pods with retry logic for rate limiter errors
+func listPodsWithRetry(ctx context.Context, apiClient *clients.Settings, namespace string, labelSelector labels.Selector, maxRetries int) (*corev1.PodList, error) {
+	var podList *corev1.PodList
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		podList = &corev1.PodList{}
+		err := apiClient.Client.List(ctx, podList, &client.ListOptions{
+			Namespace:     namespace,
+			LabelSelector: labelSelector,
+		})
+
+		if err == nil {
+			return podList, nil
+		}
+
+		lastErr = err
+
+		// If it's a rate limiter error, wait with exponential backoff before retrying
+		if isRateLimiterError(err) {
+			backoff := time.Duration(attempt+1) * 2 * time.Second
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
+			GinkgoLogr.Info("Rate limiter error, retrying after backoff",
+				"attempt", attempt+1, "maxRetries", maxRetries, "backoff", backoff, "error", err)
+
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+				continue
+			}
+		} else {
+			// Non-rate-limiter error, return immediately
+			return nil, err
+		}
+	}
+
+	return nil, fmt.Errorf("failed to list pods after %d retries: %w", maxRetries, lastErr)
+}
+
 // validateOperatorPodsRemoved validates that operator pods are terminated
 func validateOperatorPodsRemoved(apiClient *clients.Settings, namespace string, timeout time.Duration) error {
-	GinkgoLogr.Info("Validating operator pods are removed", "namespace", namespace)
+	GinkgoLogr.Info("Validating operator pods are removed", "namespace", namespace, "timeout", timeout)
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -3276,21 +3345,28 @@ func validateOperatorPodsRemoved(apiClient *clients.Settings, namespace string, 
 		"network-resources-injector-",
 	}
 
-	err := wait.PollUntilContextCancel(ctx, 10*time.Second, false, func(ctx context.Context) (bool, error) {
+	// Use a longer poll interval to reduce API call frequency and avoid rate limiting
+	pollInterval := 15 * time.Second
+
+	err := wait.PollUntilContextCancel(ctx, pollInterval, false, func(ctx context.Context) (bool, error) {
 		// Check pods by labels first (most reliable)
-		podList := &corev1.PodList{}
-		err := apiClient.Client.List(ctx, podList, &client.ListOptions{
-			Namespace:     namespace,
-			LabelSelector: labels.SelectorFromSet(operatorPodLabels),
-		})
+		// Use retry logic for rate limiter errors
+		podList, err := listPodsWithRetry(ctx, apiClient, namespace, labels.SelectorFromSet(operatorPodLabels), 3)
 		if err != nil {
+			// If it's a rate limiter error, continue polling (don't fail immediately)
+			if isRateLimiterError(err) {
+				GinkgoLogr.Info("Rate limiter error checking operator pods, will retry on next poll", "error", err)
+				return false, nil
+			}
 			GinkgoLogr.Info("Error listing pods with operator label", "error", err)
-		} else {
-			for _, pod := range podList.Items {
-				if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
-					GinkgoLogr.Info("Found operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase, "label", "app=sriov-network-operator")
-					return false, nil
-				}
+			// For non-rate-limiter errors, continue polling but log the error
+			return false, nil
+		}
+
+		for _, pod := range podList.Items {
+			if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
+				GinkgoLogr.Info("Found operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase, "label", "app=sriov-network-operator")
+				return false, nil
 			}
 		}
 
@@ -3298,28 +3374,31 @@ func validateOperatorPodsRemoved(apiClient *clients.Settings, namespace string, 
 		injectorLabels := map[string]string{
 			"app": "network-resources-injector",
 		}
-		podList = &corev1.PodList{}
-		err = apiClient.Client.List(ctx, podList, &client.ListOptions{
-			Namespace:     namespace,
-			LabelSelector: labels.SelectorFromSet(injectorLabels),
-		})
+		podList, err = listPodsWithRetry(ctx, apiClient, namespace, labels.SelectorFromSet(injectorLabels), 3)
 		if err != nil {
+			if isRateLimiterError(err) {
+				GinkgoLogr.Info("Rate limiter error checking injector pods, will retry on next poll", "error", err)
+				return false, nil
+			}
 			GinkgoLogr.Info("Error listing pods with injector label", "error", err)
-		} else {
-			for _, pod := range podList.Items {
-				if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
-					GinkgoLogr.Info("Found operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase, "label", "app=network-resources-injector")
-					return false, nil
-				}
+			return false, nil
+		}
+
+		for _, pod := range podList.Items {
+			if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
+				GinkgoLogr.Info("Found operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase, "label", "app=network-resources-injector")
+				return false, nil
 			}
 		}
 
 		// Also check by name patterns as fallback (in case labels are missing)
-		podList = &corev1.PodList{}
-		err = apiClient.Client.List(ctx, podList, &client.ListOptions{
-			Namespace: namespace,
-		})
+		// Use retry logic for the fallback check as well
+		podList, err = listPodsWithRetry(ctx, apiClient, namespace, nil, 3)
 		if err != nil {
+			if isRateLimiterError(err) {
+				GinkgoLogr.Info("Rate limiter error listing all pods, will retry on next poll", "error", err)
+				return false, nil
+			}
 			GinkgoLogr.Info("Error listing pods", "error", err)
 			return false, nil
 		}
@@ -3351,7 +3430,14 @@ func validateOperatorPodsRemoved(apiClient *clients.Settings, namespace string, 
 		return true, nil
 	})
 
-	return err
+	if err != nil {
+		if err == context.DeadlineExceeded {
+			return fmt.Errorf("timeout waiting for operator pods to terminate after %v: %w", timeout, err)
+		}
+		return fmt.Errorf("failed to validate operator pods are removed: %w", err)
+	}
+
+	return nil
 }
 
 // validateDaemonSetsRemoved validates that SR-IOV daemonsets are removed

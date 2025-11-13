@@ -200,7 +200,9 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		Expect(err).ToNot(HaveOccurred(), "All operator components should be removed")
 
 		By("Phase 2.4: Verifying operator pods are terminated")
-		err = validateOperatorPodsRemoved(getAPIClient(), sriovOpNs, 5*time.Minute)
+		// Increased timeout to 15 minutes to account for DaemonSet pod termination
+		// and potential API rate limiting during cleanup
+		err = validateOperatorPodsRemoved(getAPIClient(), sriovOpNs, 15*time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Operator pods should be terminated")
 
 		By("Phase 2.5: Verifying daemonsets are removed")
@@ -432,7 +434,9 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		Expect(err).ToNot(HaveOccurred(), "Failed to delete operator CSV")
 
 		By("Phase 2.2: Waiting for operator pods to terminate")
-		err = validateOperatorPodsRemoved(getAPIClient(), sriovOpNs, 5*time.Minute)
+		// Increased timeout to 15 minutes to account for DaemonSet pod termination
+		// and potential API rate limiting during cleanup
+		err = validateOperatorPodsRemoved(getAPIClient(), sriovOpNs, 15*time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Operator pods should be terminated")
 
 		GinkgoLogr.Info("Phase 2 completed: Operator removed")
