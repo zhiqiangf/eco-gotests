@@ -199,11 +199,13 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		err = validateAllComponentsRemoved(getAPIClient(), sriovOpNs, 5*time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "All operator components should be removed")
 
-		By("Phase 2.4: Verifying operator pods are terminated")
-		// Increased timeout to 15 minutes to account for DaemonSet pod termination
-		// and potential API rate limiting during cleanup
+		By("Phase 2.4: Verifying OLM-managed operator controller pods are terminated")
+		// Note: This test deletes SriovOperatorConfig (Phase 2.1), which should remove DaemonSets.
+		// However, validateOperatorPodsRemoved only checks for OLM-managed pods to be consistent
+		// with test_sriov_resource_deployment_dependency which doesn't delete SriovOperatorConfig.
+		// Increased timeout to 15 minutes to account for potential API rate limiting during cleanup
 		err = validateOperatorPodsRemoved(getAPIClient(), sriovOpNs, 15*time.Minute)
-		Expect(err).ToNot(HaveOccurred(), "Operator pods should be terminated")
+		Expect(err).ToNot(HaveOccurred(), "OLM-managed operator controller pods should be terminated")
 
 		By("Phase 2.5: Verifying daemonsets are removed")
 		err = validateDaemonSetsRemoved(getAPIClient(), sriovOpNs, 5*time.Minute)
@@ -433,11 +435,13 @@ var _ = Describe("[sig-networking] SR-IOV Component Lifecycle", Label("lifecycle
 		err = deleteOperatorCSV(getAPIClient(), sriovOpNs)
 		Expect(err).ToNot(HaveOccurred(), "Failed to delete operator CSV")
 
-		By("Phase 2.2: Waiting for operator pods to terminate")
-		// Increased timeout to 15 minutes to account for DaemonSet pod termination
-		// and potential API rate limiting during cleanup
+		By("Phase 2.2: Waiting for OLM-managed operator controller pods to terminate")
+		// Note: DaemonSet pods (network-resources-injector, config-daemon) remain running
+		// as they are not OLM-managed and are not removed by CSV deletion.
+		// They cannot apply new changes without the operator controller updating CRs.
+		// Increased timeout to 15 minutes to account for potential API rate limiting during cleanup
 		err = validateOperatorPodsRemoved(getAPIClient(), sriovOpNs, 15*time.Minute)
-		Expect(err).ToNot(HaveOccurred(), "Operator pods should be terminated")
+		Expect(err).ToNot(HaveOccurred(), "OLM-managed operator controller pods should be terminated")
 
 		GinkgoLogr.Info("Phase 2 completed: Operator removed")
 

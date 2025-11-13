@@ -105,15 +105,17 @@ The lifecycle test suite validates SR-IOV component cleanup and resource deploym
      - Creates initial SR-IOV resources with operator running
      - Deploys test pods to validate initial deployment works
    - **Phase 2: Remove Operator**
-     - Deletes CSV to remove operator
-     - Waits for operator pods to terminate
+     - Deletes CSV to remove operator (OLM-managed components)
+     - Waits for OLM-managed operator controller pods to terminate
+     - **Note:** DaemonSet pods (config-daemon, network-resources-injector) remain running
+       but cannot apply new changes without the operator controller updating CRs
    - **Phase 3: Attempt New Resource Creation**
      - Creates new SriovNetworkNodePolicy (exists in API but doesn't reconcile)
      - Creates new SriovNetwork (exists but NAD may not be created)
      - Validates resources exist but don't reconcile without operator:
-       * New policy not applied to nodes
+       * New policy not applied to nodes (operator controller not updating SriovNetworkNodeState CRs)
        * Node states don't update with new configuration
-       * No config-daemon to apply changes
+       * Config-daemon cannot apply new changes (no new CRs from operator controller to read)
    - **Phase 4: Reinstall Operator**
      - Triggers operator reinstallation
      - Waits for operator to restart

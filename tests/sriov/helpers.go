@@ -2938,29 +2938,36 @@ func waitForOperatorReinstall(apiClient *clients.Settings, namespace string, tim
 			return false, nil
 		}
 
-		// Check if operator pods are running
+		// Check if OLM-managed operator controller pods are running
+		// Note: We check specifically for operator controller pods (app=sriov-network-operator)
+		// DaemonSet pods may already be running, but we need the operator controller to be ready
+		operatorPodLabels := map[string]string{
+			"app": "sriov-network-operator",
+		}
 		podList := &corev1.PodList{}
 		err = apiClient.Client.List(ctx, podList, &client.ListOptions{
-			Namespace: namespace,
+			Namespace:     namespace,
+			LabelSelector: labels.SelectorFromSet(operatorPodLabels),
 		})
 		if err != nil {
-			GinkgoLogr.Info("Failed to list operator pods", "error", err)
+			GinkgoLogr.Info("Failed to list operator controller pods", "error", err)
 			return false, nil
 		}
 
-		runningPods := 0
+		runningControllerPods := 0
 		for _, pod := range podList.Items {
-			if pod.Status.Phase == corev1.PodRunning {
-				runningPods++
+			// Only count OLM-managed operator controller pods (exclude DaemonSet pods)
+			if !isPodManagedByDaemonSet(&pod) && pod.Status.Phase == corev1.PodRunning {
+				runningControllerPods++
 			}
 		}
 
-		if runningPods == 0 {
-			GinkgoLogr.Info("No operator pods running yet")
+		if runningControllerPods == 0 {
+			GinkgoLogr.Info("No OLM-managed operator controller pods running yet")
 			return false, nil
 		}
 
-		GinkgoLogr.Info("SR-IOV operator reinstalled successfully", "runningPods", runningPods)
+		GinkgoLogr.Info("SR-IOV operator controller reinstalled successfully", "runningControllerPods", runningControllerPods)
 		return true, nil
 	})
 
@@ -2981,31 +2988,38 @@ func validateOperatorControlPlane(apiClient *clients.Settings, namespace string)
 		return fmt.Errorf("CSV is not in Succeeded phase: %s", csv.Definition.Status.Phase)
 	}
 
-	// Check operator pods
+	// Check OLM-managed operator controller pods
+	// Note: We check specifically for operator controller pods (app=sriov-network-operator)
+	// DaemonSet pods are infrastructure components, but the controller is what performs reconciliation
+	operatorPodLabels := map[string]string{
+		"app": "sriov-network-operator",
+	}
 	podList := &corev1.PodList{}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	err = apiClient.Client.List(ctx, podList, &client.ListOptions{
-		Namespace: namespace,
+		Namespace:     namespace,
+		LabelSelector: labels.SelectorFromSet(operatorPodLabels),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to list operator pods: %w", err)
+		return fmt.Errorf("failed to list operator controller pods: %w", err)
 	}
 
 	if len(podList.Items) == 0 {
-		return fmt.Errorf("no operator pods found in namespace %s", namespace)
+		return fmt.Errorf("no operator controller pods found in namespace %s", namespace)
 	}
 
-	runningPods := 0
+	runningControllerPods := 0
 	for _, pod := range podList.Items {
-		if pod.Status.Phase == corev1.PodRunning {
-			runningPods++
+		// Only count OLM-managed operator controller pods (exclude DaemonSet pods)
+		if !isPodManagedByDaemonSet(&pod) && pod.Status.Phase == corev1.PodRunning {
+			runningControllerPods++
 		}
 	}
 
-	if runningPods == 0 {
-		return fmt.Errorf("no running operator pods found")
+	if runningControllerPods == 0 {
+		return fmt.Errorf("no running OLM-managed operator controller pods found")
 	}
 
 	// Check if CRDs are available
@@ -3014,7 +3028,7 @@ func validateOperatorControlPlane(apiClient *clients.Settings, namespace string)
 		return fmt.Errorf("failed to access SriovNetworkNodeState CRD: %w", err)
 	}
 
-	GinkgoLogr.Info("Control plane validation passed", "csvPhase", csv.Definition.Status.Phase, "runningPods", runningPods)
+	GinkgoLogr.Info("Control plane validation passed", "csvPhase", csv.Definition.Status.Phase, "runningControllerPods", runningControllerPods)
 	return nil
 }
 
@@ -3329,20 +3343,39 @@ func listPodsWithRetry(ctx context.Context, apiClient *clients.Settings, namespa
 	return nil, fmt.Errorf("failed to list pods after %d retries: %w", maxRetries, lastErr)
 }
 
-// validateOperatorPodsRemoved validates that operator pods are terminated
+// isPodManagedByDaemonSet checks if a pod is managed by a DaemonSet
+func isPodManagedByDaemonSet(pod *corev1.Pod) bool {
+	for _, ownerRef := range pod.OwnerReferences {
+		if ownerRef.Kind == "DaemonSet" {
+			return true
+		}
+	}
+	return false
+}
+
+// validateOperatorPodsRemoved validates that OLM-managed operator controller pods are terminated
+// Note: This function only checks for Deployment-managed operator pods (sriov-network-operator).
+// DaemonSet pods (network-resources-injector, sriov-network-config-daemon) are excluded because:
+// - They are not managed by OLM/CSV
+// - They are managed by SriovOperatorConfig (not CSV)
+// - CSV deletion does not remove DaemonSets
+// - They remain running but cannot apply new changes without the operator controller
 func validateOperatorPodsRemoved(apiClient *clients.Settings, namespace string, timeout time.Duration) error {
-	GinkgoLogr.Info("Validating operator pods are removed", "namespace", namespace, "timeout", timeout)
+	GinkgoLogr.Info("Validating OLM-managed operator controller pods are removed", "namespace", namespace, "timeout", timeout)
+	GinkgoLogr.Info("Note: DaemonSet pods (network-resources-injector, config-daemon) are excluded from this check as they are not OLM-managed")
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Operator pod name patterns and labels to identify operator-related pods
+	// Only check for OLM-managed operator controller pods (Deployment-managed)
+	// Exclude DaemonSet pods which are managed by SriovOperatorConfig, not CSV
 	operatorPodLabels := map[string]string{
 		"app": "sriov-network-operator",
 	}
 	operatorPodNamePrefixes := []string{
 		"sriov-network-operator-",
-		"network-resources-injector-",
+		// Note: network-resources-injector- and sriov-network-config-daemon- are excluded
+		// as they are DaemonSet-managed and not removed by CSV deletion
 	}
 
 	// Use a longer poll interval to reduce API call frequency and avoid rate limiting
@@ -3364,29 +3397,14 @@ func validateOperatorPodsRemoved(apiClient *clients.Settings, namespace string, 
 		}
 
 		for _, pod := range podList.Items {
-			if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
-				GinkgoLogr.Info("Found operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase, "label", "app=sriov-network-operator")
-				return false, nil
+			// Exclude DaemonSet-managed pods (they're not OLM-managed)
+			if isPodManagedByDaemonSet(&pod) {
+				GinkgoLogr.Info("Skipping DaemonSet-managed pod (not OLM-managed)", "pod", pod.Name)
+				continue
 			}
-		}
 
-		// Also check network-resources-injector pods
-		injectorLabels := map[string]string{
-			"app": "network-resources-injector",
-		}
-		podList, err = listPodsWithRetry(ctx, apiClient, namespace, labels.SelectorFromSet(injectorLabels), 3)
-		if err != nil {
-			if isRateLimiterError(err) {
-				GinkgoLogr.Info("Rate limiter error checking injector pods, will retry on next poll", "error", err)
-				return false, nil
-			}
-			GinkgoLogr.Info("Error listing pods with injector label", "error", err)
-			return false, nil
-		}
-
-		for _, pod := range podList.Items {
 			if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
-				GinkgoLogr.Info("Found operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase, "label", "app=network-resources-injector")
+				GinkgoLogr.Info("Found OLM-managed operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase, "label", "app=sriov-network-operator")
 				return false, nil
 			}
 		}
@@ -3405,34 +3423,36 @@ func validateOperatorPodsRemoved(apiClient *clients.Settings, namespace string, 
 
 		runningOperatorPods := 0
 		for _, pod := range podList.Items {
-			// Check if this is an operator pod by name pattern
-			isOperatorPod := false
+			// Check if this is an operator controller pod by name pattern
+			isOperatorControllerPod := false
 			for _, prefix := range operatorPodNamePrefixes {
 				if strings.HasPrefix(pod.Name, prefix) {
-					isOperatorPod = true
+					isOperatorControllerPod = true
 					break
 				}
 			}
 
-			// Only check operator pods, ignore test pods
-			if isOperatorPod && (pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending) {
-				runningOperatorPods++
-				GinkgoLogr.Info("Found operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase)
+			// Exclude DaemonSet-managed pods and test pods
+			if isOperatorControllerPod && !isPodManagedByDaemonSet(&pod) {
+				if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
+					runningOperatorPods++
+					GinkgoLogr.Info("Found OLM-managed operator pod still present", "pod", pod.Name, "phase", pod.Status.Phase)
+				}
 			}
 		}
 
 		if runningOperatorPods > 0 {
-			GinkgoLogr.Info("Waiting for operator pods to terminate", "runningOperatorPods", runningOperatorPods)
+			GinkgoLogr.Info("Waiting for OLM-managed operator pods to terminate", "runningOperatorPods", runningOperatorPods)
 			return false, nil
 		}
 
-		GinkgoLogr.Info("All operator pods terminated")
+		GinkgoLogr.Info("All OLM-managed operator controller pods terminated")
 		return true, nil
 	})
 
 	if err != nil {
 		if err == context.DeadlineExceeded {
-			return fmt.Errorf("timeout waiting for operator pods to terminate after %v: %w", timeout, err)
+			return fmt.Errorf("timeout waiting for OLM-managed operator pods to terminate after %v: %w", timeout, err)
 		}
 		return fmt.Errorf("failed to validate operator pods are removed: %w", err)
 	}
