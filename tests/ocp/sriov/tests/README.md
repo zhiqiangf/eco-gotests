@@ -52,7 +52,39 @@ If `SRIOV_DEVICES` is not set, the test suite uses default device configurations
 
 ## Running the Tests
 
+### Running Only OCP SR-IOV Tests (Recommended)
+
+To run only the OCP SR-IOV tests (excluding other SR-IOV test suites), you can use either `go test` or direct `ginkgo` execution:
+
+#### Using `go test` (Recommended)
+
+```bash
+export KUBECONFIG=/path/to/kubeconfig
+export SRIOV_DEVICES="e810xxv231:159b:8086:eno12399,cx5ex231:1019:15b3:ens6f0np0"  # Optional: custom device config
+export GOSUMDB=sum.golang.org
+export GOTOOLCHAIN=auto
+go test ./tests/ocp/sriov/... -v -ginkgo.v -ginkgo.label-filter="sriov && basic" -timeout 60m
+```
+
+#### Using `ginkgo` directly
+
+```bash
+export KUBECONFIG=/path/to/kubeconfig
+export SRIOV_DEVICES="e810xxv231:159b:8086:eno12399,cx5ex231:1019:15b3:ens6f0np0"  # Optional: custom device config
+export GOSUMDB=sum.golang.org
+export GOTOOLCHAIN=auto
+export ECO_TEST_LABELS="sriov && basic"
+cd tests/ocp/sriov
+ginkgo -timeout=60m --keep-going --require-suite --label-filter="$ECO_TEST_LABELS" -v .
+```
+
+**Note**: The 60-minute timeout provides sufficient time for all 9 test cases (which typically complete in ~35 minutes) while allowing buffer for slower environments or network delays.
+
+**Note**: Using `go test` or direct Ginkgo execution ensures only the `ocp/sriov` tests are run, avoiding conflicts with other SR-IOV test suites in the repository.
+
 ### Using the Test Runner Script
+
+**Warning**: The test runner script will discover all directories named "sriov", which may include other SR-IOV test suites. To run only OCP SR-IOV tests, use the direct Ginkgo execution method above.
 
 ```bash
 export KUBECONFIG=/path/to/kubeconfig
@@ -65,33 +97,46 @@ make run-tests
 
 #### By Test ID
 
+**Using `go test`:**
 ```bash
 export KUBECONFIG=/path/to/kubeconfig
-export ECO_TEST_FEATURES="sriov"
-export ECO_TEST_LABELS="25959"  # Run only test ID 25959
-make run-tests
+go test ./tests/ocp/sriov/... -v -ginkgo.v -ginkgo.label-filter="25959" -timeout 60m
+```
+
+**Using `ginkgo`:**
+```bash
+export KUBECONFIG=/path/to/kubeconfig
+export ECO_TEST_LABELS="25959"
+cd tests/ocp/sriov
+ginkgo -timeout=60m --keep-going --require-suite --label-filter="$ECO_TEST_LABELS" -v .
 ```
 
 #### By Multiple Test IDs
 
+**Using `go test`:**
+```bash
+go test ./tests/ocp/sriov/... -v -ginkgo.v -ginkgo.label-filter="25959 || 70820 || 25960" -timeout 60m
+```
+
+**Using `ginkgo`:**
 ```bash
 export ECO_TEST_LABELS="25959 || 70820 || 25960"
-make run-tests
+cd tests/ocp/sriov
+ginkgo -timeout=60m --keep-going --require-suite --label-filter="$ECO_TEST_LABELS" -v .
 ```
 
 #### Exclude Specific Tests
 
+**Using `go test`:**
 ```bash
-export ECO_TEST_LABELS="sriov && basic && !69582"  # Exclude DPDK test
-make run-tests
+go test ./tests/ocp/sriov/... -v -ginkgo.v -ginkgo.label-filter="sriov && basic && !69582" -timeout 60m
 ```
 
-### Direct Ginkgo Execution
-
+**Using `ginkgo`:**
 ```bash
-export KUBECONFIG=/path/to/kubeconfig
+export ECO_TEST_LABELS="sriov && basic && !69582"  # Exclude DPDK test
 cd tests/ocp/sriov
-ginkgo -v --label-filter="sriov && basic" .
+ginkgo -timeout=60m --keep-going --require-suite --label-filter="$ECO_TEST_LABELS" -v .
 ```
 
 ## Test Cases
@@ -355,6 +400,8 @@ Tests automatically skip devices that:
 - Unique network names prevent conflicts
 - All resources are cleaned up after each test
 - Policies are cleaned up in `AfterAll` hook
+- Leftover resources from previous test runs are automatically cleaned up in `BeforeSuite`
+- Existing policies with the same name are removed before creating new ones to prevent VF range conflicts
 
 ## Troubleshooting
 
@@ -388,6 +435,19 @@ oc describe deployment -n openshift-sriov-network-operator
 
 **Solution**: This is expected for some devices. The test will skip devices with NO-CARRIER status automatically.
 
+#### Test Fails with "VF index range is overlapped with existing policy"
+
+**Solution**: This error occurs when a policy with the same VF range already exists. The test suite automatically cleans up existing policies before creating new ones, but if you encounter this error:
+
+1. Manually delete conflicting policies:
+   ```bash
+   oc delete sriovnetworknodepolicy <policy-name> -n openshift-sriov-network-operator
+   ```
+
+2. Wait for the policy to be fully deleted before rerunning the test
+
+3. The `BeforeSuite` hook also performs automatic cleanup of leftover policies matching common test device names
+
 #### DPDK Test Fails
 
 **Possible Causes**:
@@ -417,7 +477,11 @@ make run-tests
 
 ### XML Reports
 
-XML reports are generated automatically at `/tmp/junit.xml` and `/tmp/reports/`.
+XML reports are generated automatically:
+- JUnit report: `/tmp/junit.xml`
+- Test run report: `/tmp/reports/sriov_testrun.xml`
+
+The reports directory (`/tmp/reports/`) is automatically created if it doesn't exist.
 
 To disable XML reports:
 ```bash

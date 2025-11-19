@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -724,7 +723,7 @@ var _ = Describe(
 					Eventually(func() error {
 						_, err := nad.Pull(sriovenv.APIClient, networkName, ns1)
 						return err
-					}, 30*time.Second, 2*time.Second).ShouldNot(HaveOccurred(), "NAD %q should be ready in namespace %q", networkName, ns1)
+					}, tsparams.NamespaceTimeout, tsparams.RetryInterval).ShouldNot(HaveOccurred(), "NAD %q should be ready in namespace %q", networkName, ns1)
 
 					// Create DPDK test pod
 					By("Creating DPDK test pod")
@@ -733,7 +732,7 @@ var _ = Describe(
 
 					DeferCleanup(func() {
 						By("Cleaning up DPDK test pod")
-						err := sriovenv.DeleteDpdkTestPod(sriovenv.APIClient, "sriovdpdk", ns1, 30*time.Second)
+						err := sriovenv.DeleteDpdkTestPod(sriovenv.APIClient, "sriovdpdk", ns1, tsparams.NamespaceTimeout)
 						Expect(err).ToNot(HaveOccurred(), "Failed to delete DPDK test pod")
 					})
 

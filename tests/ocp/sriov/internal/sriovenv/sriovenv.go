@@ -208,7 +208,38 @@ func CleanupLeftoverResources(apiClient *clients.Settings, sriovOperatorNamespac
 		}
 	}
 
-	// Step 3: Log cleanup summary
+	// Step 3: Clean up leftover SR-IOV policies that might conflict
+	// Clean up policies that match common test device names to prevent VF range conflicts
+	sriovPolicies, err := sriov.ListPolicy(apiClient, sriovOperatorNamespace, client.ListOptions{})
+	if err != nil {
+		glog.V(90).Infof("Failed to list SriovNetworkNodePolicies for cleanup: %v", err)
+	} else {
+		// List of common test device names that should be cleaned up
+		testDeviceNames := []string{"e810xxv", "cx5ex", "e810c", "x710", "bcm57414", "bcm57508", "e810back", "cx7anl244"}
+		for _, policy := range sriovPolicies {
+			policyName := policy.Definition.Name
+			// Check if policy name matches a test device name (exact match or with suffix)
+			shouldCleanup := false
+			for _, deviceName := range testDeviceNames {
+				if policyName == deviceName || strings.HasPrefix(policyName, deviceName) {
+					shouldCleanup = true
+					break
+				}
+			}
+			if shouldCleanup {
+				glog.V(90).Infof("Removing leftover SR-IOV policy %q to prevent VF range conflicts", policyName)
+				err := policy.Delete()
+				if err != nil {
+					glog.V(90).Infof("Failed to delete leftover SR-IOV policy %q (continuing cleanup): %v", policyName, err)
+				} else {
+					// Wait a bit for the policy to be fully deleted
+					time.Sleep(2 * time.Second)
+				}
+			}
+		}
+	}
+
+	// Step 4: Log cleanup summary
 	glog.V(90).Info("Cleanup of leftover resources completed")
 	return nil
 }
@@ -931,6 +962,29 @@ func VerifyWorkerNodesReady(apiClient *clients.Settings, workerNodes []*nodes.Bu
 	return nil
 }
 
+// discoverInterfaceName discovers the actual interface name on a node by matching Vendor and DeviceID
+func discoverInterfaceName(apiClient *clients.Settings, nodeName, sriovOpNs, vendor, deviceID string) (string, error) {
+	nodeState := sriov.NewNetworkNodeStateBuilder(apiClient, nodeName, sriovOpNs)
+	if err := nodeState.Discover(); err != nil {
+		return "", fmt.Errorf("failed to discover node state for node %q: %w", nodeName, err)
+	}
+
+	if nodeState.Objects == nil || nodeState.Objects.Status.Interfaces == nil {
+		return "", fmt.Errorf("node state has no interfaces for node %q", nodeName)
+	}
+
+	// Find interface matching vendor and deviceID
+	for _, iface := range nodeState.Objects.Status.Interfaces {
+		if iface.Vendor == vendor && iface.DeviceID == deviceID {
+			glog.V(90).Infof("Found interface %q on node %q matching vendor %q and deviceID %q",
+				iface.Name, nodeName, vendor, deviceID)
+			return iface.Name, nil
+		}
+	}
+
+	return "", fmt.Errorf("no interface found on node %q matching vendor %q and deviceID %q", nodeName, vendor, deviceID)
+}
+
 // InitVF initializes VF for the given device
 func InitVF(apiClient *clients.Settings, config *tsparams.NetworkConfig, name, deviceID, interfaceName, vendor, sriovOpNs string, vfNum int, workerNodes []*nodes.Builder) (bool, error) {
 	glog.V(90).Infof("Initializing VF for device %q (deviceID: %q, vendor: %q, interface: %q, vfNum: %d)",
@@ -943,11 +997,31 @@ func InitVF(apiClient *clients.Settings, config *tsparams.NetworkConfig, name, d
 		return false, fmt.Errorf("worker nodes are not ready for SRIOV initialization: %w", err)
 	}
 
+	// Clean up any existing policy with the same name before creating a new one
+	// This prevents VF range conflicts from previous test runs
+	glog.V(90).Infof("Checking for existing SRIOV policy %q that might conflict", name)
+	err = RemoveSriovPolicy(apiClient, name, sriovOpNs, tsparams.NamespaceTimeout)
+	if err != nil {
+		glog.V(90).Infof("Note: Could not remove existing policy %q (may not exist): %v", name, err)
+	}
+
 	// Check if the device exists on any worker node
 	for _, node := range workerNodes {
-		pfSelector := fmt.Sprintf("%s#0-%d", interfaceName, vfNum-1)
+		// Try to discover the actual interface name from node state if vendor and deviceID are provided
+		actualInterfaceName := interfaceName
+		if vendor != "" && deviceID != "" {
+			discoveredName, err := discoverInterfaceName(apiClient, node.Definition.Name, sriovOpNs, vendor, deviceID)
+			if err == nil {
+				actualInterfaceName = discoveredName
+				glog.V(90).Infof("Discovered interface name %q for node %q (requested: %q)", actualInterfaceName, node.Definition.Name, interfaceName)
+			} else {
+				glog.V(90).Infof("Could not discover interface name for node %q, using requested name %q: %v", node.Definition.Name, interfaceName, err)
+			}
+		}
+
+		pfSelector := fmt.Sprintf("%s#0-%d", actualInterfaceName, vfNum-1)
 		glog.V(90).Infof("Creating SRIOV policy - name: %q, node: %q, pfSelector: %q, deviceID: %q, vendor: %q, interfaceName: %q",
-			name, node.Definition.Name, pfSelector, deviceID, vendor, interfaceName)
+			name, node.Definition.Name, pfSelector, deviceID, vendor, actualInterfaceName)
 
 		// Create SRIOV policy
 		sriovPolicy := sriov.NewPolicyBuilder(
@@ -960,10 +1034,19 @@ func InitVF(apiClient *clients.Settings, config *tsparams.NetworkConfig, name, d
 			map[string]string{"kubernetes.io/hostname": node.Definition.Name},
 		).WithDevType("netdevice")
 
+		// Set Vendor and DeviceID in NicSelector to help operator match hardware
+		// This is especially important when interface names might not match exactly
+		if vendor != "" {
+			sriovPolicy.Definition.Spec.NicSelector.Vendor = vendor
+		}
+		if deviceID != "" {
+			sriovPolicy.Definition.Spec.NicSelector.DeviceID = deviceID
+		}
+
 		_, err := sriovPolicy.Create()
 		if err != nil {
 			glog.V(90).Infof("Failed to create SRIOV policy on node %q: %v (pfSelector: %q, deviceID: %q, vendor: %q, interfaceName: %q)",
-				node.Definition.Name, err, pfSelector, deviceID, vendor, interfaceName)
+				node.Definition.Name, err, pfSelector, deviceID, vendor, actualInterfaceName)
 			// Clean up any partially created policy
 			_ = RemoveSriovPolicy(apiClient, name, sriovOpNs, tsparams.DefaultTimeout)
 			continue
@@ -1154,22 +1237,22 @@ func CheckVFStatusWithPassTraffic(apiClient *clients.Settings, config *tsparams.
 	}
 
 	serverPod, err := CreateTestPod(apiClient, config, "server", namespace, networkName, "192.168.1.11/24", "20:04:0f:f1:88:02")
-	if err != nil {
-		// Try to clean up client pod if server pod creation fails
-		_, _ = clientPod.DeleteAndWait(30 * time.Second)
-		return fmt.Errorf("failed to create server pod: %w", err)
-	}
+		if err != nil {
+			// Try to clean up client pod if server pod creation fails
+			_, _ = clientPod.DeleteAndWait(tsparams.NamespaceTimeout)
+			return fmt.Errorf("failed to create server pod: %w", err)
+		}
 
-	// Defer cleanup of pods
-	defer func() {
-		glog.V(90).Info("Cleaning up test pods")
-		if clientPod != nil {
-			_, _ = clientPod.DeleteAndWait(60 * time.Second)
-		}
-		if serverPod != nil {
-			_, _ = serverPod.DeleteAndWait(60 * time.Second)
-		}
-	}()
+		// Defer cleanup of pods
+		defer func() {
+			glog.V(90).Info("Cleaning up test pods")
+			if clientPod != nil {
+				_, _ = clientPod.DeleteAndWait(tsparams.CleanupTimeout)
+			}
+			if serverPod != nil {
+				_, _ = serverPod.DeleteAndWait(tsparams.CleanupTimeout)
+			}
+		}()
 
 	// Wait for pods to be ready
 	glog.V(90).Info("Waiting for client pod to be ready")
@@ -1302,11 +1385,31 @@ func InitDpdkVF(apiClient *clients.Settings, config *tsparams.NetworkConfig, nam
 		return false, fmt.Errorf("worker nodes are not ready for DPDK VF initialization: %w", err)
 	}
 
+	// Clean up any existing policy with the same name before creating a new one
+	// This prevents VF range conflicts from previous test runs
+	glog.V(90).Infof("Checking for existing DPDK SRIOV policy %q that might conflict", name)
+	err = RemoveSriovPolicy(apiClient, name, sriovOpNs, tsparams.NamespaceTimeout)
+	if err != nil {
+		glog.V(90).Infof("Note: Could not remove existing policy %q (may not exist): %v", name, err)
+	}
+
 	// Check if the device exists on any worker node
 	for _, node := range workerNodes {
-		pfSelector := fmt.Sprintf("%s#0-%d", interfaceName, vfNum-1)
+		// Try to discover the actual interface name from node state if vendor and deviceID are provided
+		actualInterfaceName := interfaceName
+		if vendor != "" && deviceID != "" {
+			discoveredName, err := discoverInterfaceName(apiClient, node.Definition.Name, sriovOpNs, vendor, deviceID)
+			if err == nil {
+				actualInterfaceName = discoveredName
+				glog.V(90).Infof("Discovered interface name %q for node %q (requested: %q)", actualInterfaceName, node.Definition.Name, interfaceName)
+			} else {
+				glog.V(90).Infof("Could not discover interface name for node %q, using requested name %q: %v", node.Definition.Name, interfaceName, err)
+			}
+		}
+
+		pfSelector := fmt.Sprintf("%s#0-%d", actualInterfaceName, vfNum-1)
 		glog.V(90).Infof("Creating DPDK SRIOV policy - name: %q, node: %q, pfSelector: %q, deviceID: %q, vendor: %q, interfaceName: %q",
-			name, node.Definition.Name, pfSelector, deviceID, vendor, interfaceName)
+			name, node.Definition.Name, pfSelector, deviceID, vendor, actualInterfaceName)
 
 		// Create SRIOV policy for DPDK (uses vfio-pci dev type)
 		sriovPolicy := sriov.NewPolicyBuilder(
@@ -1319,10 +1422,19 @@ func InitDpdkVF(apiClient *clients.Settings, config *tsparams.NetworkConfig, nam
 			map[string]string{"kubernetes.io/hostname": node.Definition.Name},
 		).WithDevType("vfio-pci")
 
+		// Set Vendor and DeviceID in NicSelector to help operator match hardware
+		// This is especially important when interface names might not match exactly
+		if vendor != "" {
+			sriovPolicy.Definition.Spec.NicSelector.Vendor = vendor
+		}
+		if deviceID != "" {
+			sriovPolicy.Definition.Spec.NicSelector.DeviceID = deviceID
+		}
+
 		_, err := sriovPolicy.Create()
 		if err != nil {
 			glog.V(90).Infof("Failed to create DPDK SRIOV policy on node %q: %v (pfSelector: %q, deviceID: %q, vendor: %q, interfaceName: %q)",
-				node.Definition.Name, err, pfSelector, deviceID, vendor, interfaceName)
+				node.Definition.Name, err, pfSelector, deviceID, vendor, actualInterfaceName)
 			// Clean up any partially created policy
 			_ = RemoveSriovPolicy(apiClient, name, sriovOpNs, tsparams.DefaultTimeout)
 			continue

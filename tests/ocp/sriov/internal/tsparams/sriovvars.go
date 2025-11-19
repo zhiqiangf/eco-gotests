@@ -26,7 +26,14 @@ func (nc *NetworkConfig) GetJunitReportPath() string {
 
 // GetReportPath returns the report path
 func (nc *NetworkConfig) GetReportPath() string {
-	return "/tmp/reports"
+	// Ensure the reports directory exists
+	reportsDir := "/tmp/reports"
+	if err := os.MkdirAll(reportsDir, 0755); err != nil {
+		// If we can't create the directory, fall back to /tmp
+		reportsDir = "/tmp"
+	}
+	// Return a file path, not a directory
+	return fmt.Sprintf("%s/sriov_testrun.xml", reportsDir)
 }
 
 // TCPrefix returns the test case prefix
