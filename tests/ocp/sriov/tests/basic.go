@@ -393,9 +393,8 @@ var _ = Describe(
 				executed = true
 
 				// Configure MTU in SR-IOV policy
-				mtuValue := 1800
-				By(fmt.Sprintf("Updating SR-IOV policy %q with MTU %d", data.Name, mtuValue))
-				err = sriovenv.UpdateSriovPolicyMTU(data.Name, mtuValue)
+				By(fmt.Sprintf("Updating SR-IOV policy %q with MTU %d", data.Name, tsparams.DefaultTestMTU))
+				err = sriovenv.UpdateSriovPolicyMTU(data.Name, tsparams.DefaultTestMTU)
 				Expect(err).ToNot(HaveOccurred(), "Failed to update SR-IOV policy with MTU")
 
 				By("Waiting for SR-IOV policy to be ready after MTU update")
@@ -408,7 +407,7 @@ var _ = Describe(
 					sriovenv.WithSpoof(true), sriovenv.WithTrust(true))
 
 				err = sriovenv.CheckVFStatusWithPassTraffic(networkName, data.InterfaceName,
-					ns, fmt.Sprintf("mtu %d", mtuValue), tsparams.PodReadyTimeout)
+					ns, fmt.Sprintf("mtu %d", tsparams.DefaultTestMTU), tsparams.PodReadyTimeout)
 				if isNoCarrierError(err) {
 					Skip("Interface has NO-CARRIER status")
 				}

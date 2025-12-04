@@ -44,6 +44,11 @@ const (
 	VFResourcePollingInterval = PollingInterval * 3
 	// PingPollingInterval is the longer interval for ping operations.
 	PingPollingInterval = PollingInterval * 3
+	// DebugPodCleanupTimeout is the timeout for debug pod cleanup operations.
+	DebugPodCleanupTimeout = 15 * time.Second
+
+	// DefaultTestMTU is the default MTU value used in MTU configuration tests.
+	DefaultTestMTU = 1800
 
 	// TestPodClientIP is the default IP address for test client pods.
 	TestPodClientIP = "192.168.1.10/24"

@@ -194,17 +194,11 @@ func RemoveSriovPolicy(name string, timeout time.Duration) error {
 	}
 
 	// Wait for policy to be deleted
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	return wait.PollUntilContextTimeout(ctx, tsparams.PollingInterval, timeout, true,
+	return wait.PollUntilContextTimeout(context.Background(), tsparams.PollingInterval, timeout, true,
 		func(ctx context.Context) (bool, error) {
 			_, pullErr := sriov.PullPolicy(APIClient, name, sriovOpNs)
-			if pullErr != nil {
-				return true, nil // Policy is gone
-			}
 
-			return false, nil
+			return pullErr != nil, nil // Policy is gone when pull fails
 		})
 }
 
@@ -617,7 +611,7 @@ func executeOnNode(nodeName, namespace string, cmd []string) (string, error) {
 
 	// Cleanup any existing debug pod
 	if existing, _ := pod.Pull(APIClient, debugPodName, namespace); existing != nil {
-		_, _ = existing.DeleteAndWait(15 * time.Second)
+		_, _ = existing.DeleteAndWait(tsparams.DebugPodCleanupTimeout)
 	}
 
 	debugPod := pod.NewBuilder(APIClient, debugPodName, namespace, SriovOcpConfig.OcpSriovTestContainer).
@@ -633,7 +627,7 @@ func executeOnNode(nodeName, namespace string, cmd []string) (string, error) {
 	}
 
 	defer func() {
-		_, _ = createdPod.DeleteAndWait(15 * time.Second)
+		_, _ = createdPod.DeleteAndWait(tsparams.DebugPodCleanupTimeout)
 	}()
 
 	if err := createdPod.WaitUntilReady(tsparams.PodReadyTimeout); err != nil {
