@@ -24,6 +24,13 @@ type SriovOcpConfig struct {
 	SriovInterfaces           string `envconfig:"ECO_OCP_SRIOV_SRIOV_INTERFACE_LIST"`
 }
 
+// sriovYAMLConfig is used to decode only sriov-specific fields from YAML
+// without affecting the embedded OcpConfig/GeneralConfig structs.
+type sriovYAMLConfig struct {
+	OcpSriovOperatorNamespace string `yaml:"sriov_operator_namespace"`
+	OcpSriovTestContainer     string `yaml:"ocp_sriov_test_container"`
+}
+
 // NewSriovOcpConfig returns instance of SriovConfig config type.
 func NewSriovOcpConfig() *SriovOcpConfig {
 	log.Print("Creating new SriovOcpConfig struct")
@@ -69,20 +76,51 @@ func readFile(sriovOcpConfig *SriovOcpConfig, cfgFile string) error {
 		_ = openedCfgFile.Close()
 	}()
 
+	// Use a temporary struct to decode only sriov-specific fields
+	// This prevents the YAML decoder from affecting embedded OcpConfig/GeneralConfig
+	var yamlConf sriovYAMLConfig
+
 	decoder := yaml.NewDecoder(openedCfgFile)
 
-	err = decoder.Decode(sriovOcpConfig)
+	err = decoder.Decode(&yamlConf)
 	if err != nil {
 		return err
 	}
+
+	// Copy decoded values to the actual config
+	sriovOcpConfig.OcpSriovOperatorNamespace = yamlConf.OcpSriovOperatorNamespace
+	sriovOcpConfig.OcpSriovTestContainer = yamlConf.OcpSriovTestContainer
 
 	return nil
 }
 
 func readEnv(sriovOcpConfig *SriovOcpConfig) error {
-	err := envconfig.Process("", sriovOcpConfig)
+	// Only process environment variables for sriov-specific fields
+	// Use a temporary struct to avoid affecting embedded configs
+	type sriovEnvConfig struct {
+		OcpSriovOperatorNamespace string `envconfig:"ECO_OCP_SRIOV_OPERATOR_NAMESPACE"`
+		OcpSriovTestContainer     string `envconfig:"ECO_OCP_SRIOV_TEST_CONTAINER"`
+		SriovInterfaces           string `envconfig:"ECO_OCP_SRIOV_SRIOV_INTERFACE_LIST"`
+	}
+
+	var envConf sriovEnvConfig
+
+	err := envconfig.Process("", &envConf)
 	if err != nil {
 		return err
+	}
+
+	// Override with env values if set
+	if envConf.OcpSriovOperatorNamespace != "" {
+		sriovOcpConfig.OcpSriovOperatorNamespace = envConf.OcpSriovOperatorNamespace
+	}
+
+	if envConf.OcpSriovTestContainer != "" {
+		sriovOcpConfig.OcpSriovTestContainer = envConf.OcpSriovTestContainer
+	}
+
+	if envConf.SriovInterfaces != "" {
+		sriovOcpConfig.SriovInterfaces = envConf.SriovInterfaces
 	}
 
 	return nil
