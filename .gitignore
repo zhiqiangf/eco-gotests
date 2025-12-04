@@ -21,22 +21,3 @@
 reports
 .vscode
 
-# Test report files
-*_junit.xml
-*_testrun.xml
-*_metadata.txt
-
-# Cursor AI configuration
-.cursorrules
-
-# Ignore all markdown files except important documentation files
-*.md
-# Whitelist important root-level documentation files
-!README.md
-!CONTRIBUTING.md
-!CODE_OF_CONDUCT.md
-!CHANGELOG.md
-!SECURITY.md
-# Whitelist README.md files in subdirectories
-!**/README.md
-
