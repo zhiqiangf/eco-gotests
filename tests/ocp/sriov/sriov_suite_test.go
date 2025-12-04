@@ -14,7 +14,6 @@ import (
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/reportxml"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/internal/params"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/internal/reporter"
-	sriovconfig "github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/ocpsriovconfig"
 	. "github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/ocpsriovinittools"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/sriovenv"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/tsparams"
@@ -30,10 +29,6 @@ var (
 )
 
 func TestSriov(t *testing.T) {
-	// Generate timestamp once at suite start for consistent report naming
-	timestamp := sriovconfig.GetTimestamp()
-	SriovOcpConfig.SetReportTimestamp(timestamp)
-
 	_, reporterConfig := GinkgoConfiguration()
 	reporterConfig.JUnitReport = SriovOcpConfig.GetJunitReportPath(currentFile)
 

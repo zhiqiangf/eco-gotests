@@ -1,12 +1,10 @@
 package sriovconfig
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
-	"time"
 
 	"github.com/kelseyhightower/envconfig"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/internal/ocpconfig"
@@ -24,7 +22,6 @@ type SriovOcpConfig struct {
 	OcpSriovOperatorNamespace string `yaml:"sriov_operator_namespace" envconfig:"ECO_OCP_SRIOV_OPERATOR_NAMESPACE"`
 	OcpSriovTestContainer     string `yaml:"ocp_sriov_test_container" envconfig:"ECO_OCP_SRIOV_TEST_CONTAINER"`
 	SriovInterfaces           string `envconfig:"ECO_OCP_SRIOV_SRIOV_INTERFACE_LIST"`
-	reportTimestamp           string // Timestamp generated once at suite start for consistent report naming
 }
 
 // NewSriovOcpConfig returns instance of SriovConfig config type.
@@ -89,65 +86,4 @@ func readEnv(sriovOcpConfig *SriovOcpConfig) error {
 	}
 
 	return nil
-}
-
-// GetTimestamp returns the current timestamp for report generation.
-// This should be called once at suite start and stored for consistent naming across all reports.
-func GetTimestamp() string {
-	return time.Now().Format("20060102_150405")
-}
-
-// SetReportTimestamp sets the report timestamp to be used for all report files.
-// This ensures consistent timestamps across JUnit and test run reports.
-func (cfg *SriovOcpConfig) SetReportTimestamp(timestamp string) {
-	cfg.reportTimestamp = timestamp
-}
-
-// GetJunitReportPath returns full path to the junit report file with timestamp.
-// Format: {reportsDir}/sriov_suite_test_{timestamp}_junit.xml
-// Uses the timestamp set via SetReportTimestamp() if available, otherwise generates a new one.
-func (cfg *SriovOcpConfig) GetJunitReportPath(file string) string {
-	// Validate reports directory path
-	reportsDir := cfg.ReportsDirAbsPath
-	if reportsDir == "" {
-		// Fall back to current directory if reports path not configured
-		reportsDir = "."
-	}
-
-	reportFileName := filepath.Base(file)
-
-	ext := filepath.Ext(reportFileName)
-	if ext != "" {
-		reportFileName = reportFileName[:len(reportFileName)-len(ext)]
-	}
-
-	// Use stored timestamp if available, otherwise generate new one
-	timestamp := cfg.reportTimestamp
-	if timestamp == "" {
-		timestamp = time.Now().Format("20060102_150405")
-	}
-
-	return fmt.Sprintf("%s_%s_junit.xml", filepath.Join(reportsDir, reportFileName), timestamp)
-}
-
-// GetReportPath returns full path to the reportxml file with timestamp.
-// Format: {reportsDir}/report_{timestamp}_testrun.xml
-// Uses the timestamp set via SetReportTimestamp() if available, otherwise generates a new one.
-func (cfg *SriovOcpConfig) GetReportPath() string {
-	if !cfg.EnableReport {
-		return ""
-	}
-
-	reportsDir := cfg.ReportsDirAbsPath
-	if reportsDir == "" {
-		reportsDir = "."
-	}
-
-	// Use stored timestamp if available, otherwise generate new one
-	timestamp := cfg.reportTimestamp
-	if timestamp == "" {
-		timestamp = time.Now().Format("20060102_150405")
-	}
-
-	return fmt.Sprintf("%s_%s_testrun.xml", filepath.Join(reportsDir, "report"), timestamp)
 }
