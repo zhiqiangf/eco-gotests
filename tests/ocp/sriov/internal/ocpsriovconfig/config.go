@@ -21,7 +21,6 @@ const (
 // SriovOcpConfig type keeps sriov configuration.
 type SriovOcpConfig struct {
 	*ocpconfig.OcpConfig
-	OcpWorkerLabel            string `yaml:"ocp_worker_label" envconfig:"ECO_OCP_SRIOV_WORKER_LABEL"`
 	OcpSriovOperatorNamespace string `yaml:"sriov_operator_namespace" envconfig:"ECO_OCP_SRIOV_OPERATOR_NAMESPACE"`
 	OcpSriovTestContainer     string `yaml:"ocp_sriov_test_container" envconfig:"ECO_OCP_SRIOV_TEST_CONTAINER"`
 	SriovInterfaces           string `envconfig:"ECO_OCP_SRIOV_SRIOV_INTERFACE_LIST"`

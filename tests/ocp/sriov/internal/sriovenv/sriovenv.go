@@ -70,11 +70,11 @@ func WaitForSriovAndMCPStable(timeout, interval time.Duration) error {
 				return false, nil
 			}
 
-		for _, mcp := range mcpList {
-			if !mcp.IsInCondition(mcv1.MachineConfigPoolUpdated) {
-				return false, nil
+			for _, mcp := range mcpList {
+				if !mcp.IsInCondition(mcv1.MachineConfigPoolUpdated) {
+					return false, nil
+				}
 			}
-		}
 
 			return true, nil
 		})
@@ -180,7 +180,7 @@ func RemoveSriovNetwork(name string, timeout time.Duration) error {
 // Policy Management
 // ============================================================================
 
-// RemoveSriovPolicy removes a SRIOV policy by name.
+// RemoveSriovPolicy removes a SRIOV policy by name and waits for deletion.
 func RemoveSriovPolicy(name string, timeout time.Duration) error {
 	sriovOpNs := SriovOcpConfig.OcpSriovOperatorNamespace
 
@@ -189,7 +189,23 @@ func RemoveSriovPolicy(name string, timeout time.Duration) error {
 		return nil // Already deleted
 	}
 
-	return policy.Delete()
+	if err := policy.Delete(); err != nil {
+		return fmt.Errorf("failed to delete policy %q: %w", name, err)
+	}
+
+	// Wait for policy to be deleted
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	return wait.PollUntilContextTimeout(ctx, tsparams.PollingInterval, timeout, true,
+		func(ctx context.Context) (bool, error) {
+			_, pullErr := sriov.PullPolicy(APIClient, name, sriovOpNs)
+			if pullErr != nil {
+				return true, nil // Policy is gone
+			}
+
+			return false, nil
+		})
 }
 
 // InitVF initializes VF for the given device.

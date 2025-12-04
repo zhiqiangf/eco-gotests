@@ -93,7 +93,7 @@ var _ = Describe(
 
 			By("Discovering worker nodes")
 			workerNodes, err = nodes.List(APIClient,
-				metav1.ListOptions{LabelSelector: SriovOcpConfig.OcpWorkerLabel})
+				metav1.ListOptions{LabelSelector: SriovOcpConfig.WorkerLabel})
 			Expect(err).ToNot(HaveOccurred(), "Failed to discover nodes")
 			Expect(len(workerNodes)).To(BeNumerically(">", 0), "No worker nodes found")
 		})

@@ -43,11 +43,9 @@ func TestSriov(t *testing.T) {
 
 var _ = BeforeSuite(func() {
 	By("Validating test configuration")
-	// Ensure worker label uses "key=value" or "key=" format
-	if SriovOcpConfig.OcpWorkerLabel != "" && !strings.Contains(SriovOcpConfig.OcpWorkerLabel, "=") {
-		Fail("Invalid worker label configuration: OcpWorkerLabel must be in format 'key=value' or 'key=' " +
-			"(e.g., 'node-role.kubernetes.io/worker='). " +
-			"Current value: '" + SriovOcpConfig.OcpWorkerLabel + "'.")
+	// WorkerLabel is provided by GeneralConfig and is always in correct format
+	if SriovOcpConfig.WorkerLabel == "" {
+		Fail("Worker label not configured. Ensure ECO_WORKER_LABEL is set or default config is loaded.")
 	}
 
 	By("Cleaning up leftover resources from previous test runs")
