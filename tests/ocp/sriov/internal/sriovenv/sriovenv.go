@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	mcv1 "github.com/openshift/api/machineconfiguration/v1"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/mco"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/nad"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/namespace"
@@ -69,11 +70,11 @@ func WaitForSriovAndMCPStable(timeout, interval time.Duration) error {
 				return false, nil
 			}
 
-			for _, mcp := range mcpList {
-				if !mcp.IsInCondition("Updated") {
-					return false, nil
-				}
+		for _, mcp := range mcpList {
+			if !mcp.IsInCondition(mcv1.MachineConfigPoolUpdated) {
+				return false, nil
 			}
+		}
 
 			return true, nil
 		})
@@ -359,8 +360,28 @@ func WaitForPodWithLabelReady(namespace, labelSelector string, timeout time.Dura
 				return false, nil
 			}
 
+			// Check if all pods are ready
 			for _, p := range podList {
-				if err := p.WaitUntilReady(tsparams.PollingInterval); err != nil {
+				if p.Object == nil {
+					return false, nil
+				}
+
+				// Check pod phase
+				if p.Object.Status.Phase != corev1.PodRunning {
+					return false, nil
+				}
+
+				// Check container ready conditions
+				allReady := true
+				for _, containerStatus := range p.Object.Status.ContainerStatuses {
+					if !containerStatus.Ready {
+						allReady = false
+
+						break
+					}
+				}
+
+				if !allReady {
 					return false, nil
 				}
 			}
