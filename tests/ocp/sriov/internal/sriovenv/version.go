@@ -5,19 +5,19 @@ import (
 	"strings"
 
 	configv1 "github.com/openshift/api/config/v1"
-	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/clients"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/clusterversion"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/olm"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/pod"
+	. "github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/ocpsriovinittools"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 )
 
 // GetOCPVersion retrieves the OpenShift cluster version.
-func GetOCPVersion(apiClient *clients.Settings) (string, error) {
+func GetOCPVersion() (string, error) {
 	klog.V(90).Info("Retrieving OpenShift cluster version")
 
-	clusterVersion, err := clusterversion.Pull(apiClient)
+	clusterVersion, err := clusterversion.Pull(APIClient)
 	if err != nil {
 		return "", fmt.Errorf("failed to get cluster version: %w", err)
 	}
@@ -27,7 +27,6 @@ func GetOCPVersion(apiClient *clients.Settings) (string, error) {
 	}
 
 	// Try to get completed version from history first
-	// History is ordered by recency with newest update first (index 0 is most recent)
 	histories := clusterVersion.Object.Status.History
 	for i := 0; i < len(histories); i++ {
 		if histories[i].State == configv1.CompletedUpdate {
@@ -46,24 +45,23 @@ func GetOCPVersion(apiClient *clients.Settings) (string, error) {
 }
 
 // GetSriovOperatorVersion retrieves the SR-IOV operator version from CSV.
-func GetSriovOperatorVersion(apiClient *clients.Settings, namespace string) (string, error) {
+func GetSriovOperatorVersion() (string, error) {
+	namespace := SriovOcpConfig.OcpSriovOperatorNamespace
 	klog.V(90).Infof("Retrieving SR-IOV operator version from namespace %s", namespace)
 
 	// List CSVs in the SR-IOV operator namespace
-	csvList, err := olm.ListClusterServiceVersion(apiClient, namespace)
+	csvList, err := olm.ListClusterServiceVersion(APIClient, namespace)
 	if err != nil {
 		return "", fmt.Errorf("failed to list CSVs in namespace %s: %w", namespace, err)
 	}
 
-	// Look for SR-IOV operator CSV using more specific matching
-	// The SR-IOV operator CSV typically contains "sriov-network-operator" in the name
+	// Look for SR-IOV operator CSV
 	const expectedCSVNameSubstring = "sriov-network-operator"
 
 	for _, csv := range csvList {
 		csvName := strings.ToLower(csv.Object.Name)
 		csvDisplayName := strings.ToLower(csv.Object.Spec.DisplayName)
 
-		// Prefer exact match on expected substring, fall back to generic "sriov" match
 		if strings.Contains(csvName, expectedCSVNameSubstring) ||
 			strings.Contains(csvDisplayName, expectedCSVNameSubstring) ||
 			strings.Contains(csvName, "sriov") ||
@@ -86,11 +84,11 @@ type PodContainerInfo struct {
 }
 
 // GetSriovOperatorPodContainers retrieves container information from all pods in the SR-IOV operator namespace.
-// This includes both regular containers and init containers.
-func GetSriovOperatorPodContainers(apiClient *clients.Settings, namespace string) ([]PodContainerInfo, error) {
+func GetSriovOperatorPodContainers() ([]PodContainerInfo, error) {
+	namespace := SriovOcpConfig.OcpSriovOperatorNamespace
 	klog.V(90).Infof("Retrieving SR-IOV operator pod container information from namespace %s", namespace)
 
-	podList, err := pod.List(apiClient, namespace, metav1.ListOptions{})
+	podList, err := pod.List(APIClient, namespace, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pods in namespace %s: %w", namespace, err)
 	}
@@ -104,24 +102,22 @@ func GetSriovOperatorPodContainers(apiClient *clients.Settings, namespace string
 
 		podName := podBuilder.Object.Name
 
-		// Get init containers from pod spec
+		// Get init containers
 		for _, container := range podBuilder.Object.Spec.InitContainers {
 			containerInfo = append(containerInfo, PodContainerInfo{
 				PodName:       podName,
 				ContainerName: container.Name + " (init)",
 				Image:         container.Image,
 			})
-			klog.V(90).Infof("Found init container: pod=%s, container=%s, image=%s", podName, container.Name, container.Image)
 		}
 
-		// Get regular containers from pod spec
+		// Get regular containers
 		for _, container := range podBuilder.Object.Spec.Containers {
 			containerInfo = append(containerInfo, PodContainerInfo{
 				PodName:       podName,
 				ContainerName: container.Name,
 				Image:         container.Image,
 			})
-			klog.V(90).Infof("Found container: pod=%s, container=%s, image=%s", podName, container.Name, container.Image)
 		}
 	}
 

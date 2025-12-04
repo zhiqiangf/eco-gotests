@@ -14,10 +14,9 @@ import (
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/reportxml"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/internal/params"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/internal/reporter"
-	"github.com/rh-ecosystem-edge/eco-gotests/tests/internal/sriovoperator"
 	sriovconfig "github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/ocpsriovconfig"
 	. "github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/ocpsriovinittools"
-	sriovenv "github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/sriovenv"
+	"github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/sriovenv"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/tsparams"
 	_ "github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/tests"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -44,16 +43,15 @@ func TestSriov(t *testing.T) {
 
 var _ = BeforeSuite(func() {
 	By("Validating test configuration")
-	// Ensure worker label uses "key=value" or "key=" format to avoid invalid selectors
+	// Ensure worker label uses "key=value" or "key=" format
 	if SriovOcpConfig.OcpWorkerLabel != "" && !strings.Contains(SriovOcpConfig.OcpWorkerLabel, "=") {
 		Fail("Invalid worker label configuration: OcpWorkerLabel must be in format 'key=value' or 'key=' " +
 			"(e.g., 'node-role.kubernetes.io/worker='). " +
-			"Current value: '" + SriovOcpConfig.OcpWorkerLabel + "'. " +
-			"Please set ECO_OCP_SRIOV_WORKER_LABEL environment variable correctly.")
+			"Current value: '" + SriovOcpConfig.OcpWorkerLabel + "'.")
 	}
 
 	By("Cleaning up leftover resources from previous test runs")
-	err := sriovenv.CleanupLeftoverResources(APIClient, SriovOcpConfig.OcpSriovOperatorNamespace)
+	err := sriovenv.CleanupLeftoverResources()
 	Expect(err).ToNot(HaveOccurred(), "Failed to cleanup leftover resources")
 
 	By("Creating test namespace with privileged labels")
@@ -68,40 +66,27 @@ var _ = BeforeSuite(func() {
 		if apierrors.IsAlreadyExists(err) {
 			klog.V(90).Infof("Test namespace %q already exists, deleting and recreating", tsparams.TestNamespaceName)
 
-			// Pull the existing namespace so we can delete it
 			existingNS, pullErr := namespace.Pull(APIClient, tsparams.TestNamespaceName)
-			Expect(pullErr).ToNot(HaveOccurred(), "Failed to pull existing test namespace %q", tsparams.TestNamespaceName)
+			Expect(pullErr).ToNot(HaveOccurred(), "Failed to pull existing test namespace")
 
-			// Delete the existing namespace
 			deleteErr := existingNS.DeleteAndWait(tsparams.DefaultTimeout)
-			Expect(deleteErr).ToNot(HaveOccurred(), "Failed to delete existing test namespace %q", tsparams.TestNamespaceName)
+			Expect(deleteErr).ToNot(HaveOccurred(), "Failed to delete existing test namespace")
 
-			// Recreate the namespace with fresh state
 			testNS = namespace.NewBuilder(APIClient, tsparams.TestNamespaceName)
 			for key, value := range params.PrivilegedNSLabels {
 				testNS.WithLabel(key, value)
 			}
 
 			_, err = testNS.Create()
-			Expect(err).ToNot(HaveOccurred(), "Failed to recreate test namespace %q", tsparams.TestNamespaceName)
+			Expect(err).ToNot(HaveOccurred(), "Failed to recreate test namespace")
 		} else {
-			Fail(fmt.Sprintf("Failed to create test namespace %q: %v", tsparams.TestNamespaceName, err))
+			Fail(fmt.Sprintf("Failed to create test namespace: %v", err))
 		}
 	}
 
 	By("Verifying if sriov tests can be executed on given cluster")
-	err = sriovoperator.IsSriovDeployed(APIClient, SriovOcpConfig.OcpSriovOperatorNamespace)
+	err = sriovenv.CheckSriovOperatorStatus()
 	Expect(err).ToNot(HaveOccurred(), "Cluster doesn't support sriov test cases")
-
-	By("Pulling test images on cluster before running test cases")
-	// Use local PullTestImageOnNodes which defers image pulling to first pod creation
-	// This avoids the bug in cluster.PullTestImageOnNodes and reduces test startup time
-	err = sriovenv.PullTestImageOnNodes(
-		APIClient,
-		SriovOcpConfig.OcpWorkerLabel,
-		SriovOcpConfig.OcpSriovTestContainer,
-		int(tsparams.DefaultTimeout.Seconds()))
-	Expect(err).ToNot(HaveOccurred(), "Failed to pull test image on nodes")
 })
 
 var _ = AfterSuite(func() {
@@ -125,13 +110,13 @@ var _ = ReportAfterSuite("", func(report Report) {
 	var ocpVersion, sriovVersion string
 	var versionErr error
 
-	ocpVersion, versionErr = sriovenv.GetOCPVersion(APIClient)
+	ocpVersion, versionErr = sriovenv.GetOCPVersion()
 	if versionErr != nil {
 		klog.V(90).Infof("Failed to get OCP version: %v", versionErr)
 		ocpVersion = "unknown"
 	}
 
-	sriovVersion, versionErr = sriovenv.GetSriovOperatorVersion(APIClient, SriovOcpConfig.OcpSriovOperatorNamespace)
+	sriovVersion, versionErr = sriovenv.GetSriovOperatorVersion()
 	if versionErr != nil {
 		klog.V(90).Infof("Failed to get SR-IOV operator version: %v", versionErr)
 		sriovVersion = "unknown"
@@ -139,7 +124,8 @@ var _ = ReportAfterSuite("", func(report Report) {
 
 	// Get SR-IOV operator pod container information
 	var containerInfo []sriovenv.PodContainerInfo
-	containerInfo, versionErr = sriovenv.GetSriovOperatorPodContainers(APIClient, SriovOcpConfig.OcpSriovOperatorNamespace)
+
+	containerInfo, versionErr = sriovenv.GetSriovOperatorPodContainers()
 	if versionErr != nil {
 		klog.V(90).Infof("Failed to get SR-IOV operator pod containers: %v", versionErr)
 		containerInfo = []sriovenv.PodContainerInfo{}
@@ -152,15 +138,7 @@ var _ = ReportAfterSuite("", func(report Report) {
 	reportPath := SriovOcpConfig.GetReportPath()
 	reportxml.Create(report, reportPath, SriovOcpConfig.TCPrefix)
 
-	// Write version metadata to a separate file alongside the report
-	// Metadata file format:
-	// - Plain text format for human readability
-	// - Contains: OCP version, SR-IOV operator version, report timestamp, and container information
-	// - Container information is grouped by pod name, showing both regular and init containers
-	// - Format: "Container: <name>" for regular containers, "Container: <name> (init)" for init containers
-	// - Each container entry includes its image
-	// Note: For machine parsing, consider future enhancement to YAML/JSON format
-	// Only create metadata file if report path is available (EnableReport must be true)
+	// Write version metadata to a separate file
 	if reportPath != "" {
 		metadataPath := strings.TrimSuffix(reportPath, ".xml") + "_metadata.txt"
 
@@ -177,16 +155,17 @@ var _ = ReportAfterSuite("", func(report Report) {
 				podMap[info.PodName] = append(podMap[info.PodName], info)
 			}
 
-			// Sort pod names for consistent output order
 			podNames := make([]string, 0, len(podMap))
 			for podName := range podMap {
 				podNames = append(podNames, podName)
 			}
+
 			sort.Strings(podNames)
 
 			for _, podName := range podNames {
 				containers := podMap[podName]
 				metadataBuilder.WriteString(fmt.Sprintf("\n  Pod: %s\n", podName))
+
 				for _, container := range containers {
 					metadataBuilder.WriteString(fmt.Sprintf("    Container: %s\n", container.ContainerName))
 					metadataBuilder.WriteString(fmt.Sprintf("    Image: %s\n", container.Image))
@@ -203,18 +182,18 @@ var _ = ReportAfterSuite("", func(report Report) {
 		}
 	}
 
-	// Print report file locations for visibility in test logs
+	// Print report file locations
 	junitReportPath := SriovOcpConfig.GetJunitReportPath(currentFile)
 	fmt.Printf("\n=== Test Report Files ===\n")
 	fmt.Printf("JUnit Report: %s\n", junitReportPath)
 
 	if reportPath != "" {
 		fmt.Printf("Test Run Report: %s\n", reportPath)
-		// Reuse metadataPath from above (already computed when writing the file)
 		fmt.Printf("Metadata File: %s\n", strings.TrimSuffix(reportPath, ".xml")+"_metadata.txt")
 	} else {
 		fmt.Printf("Test Run Report: (disabled - set ECO_ENABLE_REPORT=true to enable)\n")
 		fmt.Printf("Metadata File: (disabled - set ECO_ENABLE_REPORT=true to enable)\n")
 	}
+
 	fmt.Printf("========================\n\n")
 })
