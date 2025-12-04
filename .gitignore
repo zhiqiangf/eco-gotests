@@ -21,6 +21,11 @@
 reports
 .vscode
 
+# Test report files
+*_junit.xml
+*_testrun.xml
+*_metadata.txt
+
 # Cursor AI configuration
 .cursorrules
 
