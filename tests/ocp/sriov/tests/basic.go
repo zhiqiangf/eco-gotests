@@ -119,6 +119,7 @@ var _ = Describe(
 		})
 
 		It("SR-IOV VF with spoof checking enabled", reportxml.ID("25959"), func() {
+			caseID := "25959"
 			executed := false
 
 			for _, data := range testData {
@@ -135,8 +136,8 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace("25959-", data)
-				networkName := "25959-" + data.Name
+				ns := setupTestNamespace(caseID+"-", data)
+				networkName := caseID + "-" + data.Name
 				setupSriovNetwork(networkName, data.Name, ns,
 					sriovenv.WithSpoof(true), sriovenv.WithTrust(false))
 
@@ -156,6 +157,7 @@ var _ = Describe(
 		})
 
 		It("SR-IOV VF with spoof checking disabled", reportxml.ID("70820"), func() {
+			caseID := "70820"
 			executed := false
 
 			for _, data := range testData {
@@ -170,8 +172,8 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace("70820-", data)
-				networkName := "70820-" + data.Name
+				ns := setupTestNamespace(caseID+"-", data)
+				networkName := caseID + "-" + data.Name
 				setupSriovNetwork(networkName, data.Name, ns,
 					sriovenv.WithSpoof(false), sriovenv.WithTrust(true))
 
@@ -190,6 +192,7 @@ var _ = Describe(
 		})
 
 		It("SR-IOV VF with trust disabled", reportxml.ID("25960"), func() {
+			caseID := "25960"
 			executed := false
 
 			for _, data := range testData {
@@ -204,8 +207,8 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace("25960-", data)
-				networkName := "25960-" + data.Name
+				ns := setupTestNamespace(caseID+"-", data)
+				networkName := caseID + "-" + data.Name
 				setupSriovNetwork(networkName, data.Name, ns,
 					sriovenv.WithSpoof(false), sriovenv.WithTrust(false))
 
@@ -224,6 +227,7 @@ var _ = Describe(
 		})
 
 		It("SR-IOV VF with trust enabled", reportxml.ID("70821"), func() {
+			caseID := "70821"
 			executed := false
 
 			for _, data := range testData {
@@ -238,8 +242,8 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace("70821-", data)
-				networkName := "70821-" + data.Name
+				ns := setupTestNamespace(caseID+"-", data)
+				networkName := caseID + "-" + data.Name
 				setupSriovNetwork(networkName, data.Name, ns,
 					sriovenv.WithSpoof(true), sriovenv.WithTrust(true))
 
@@ -258,6 +262,7 @@ var _ = Describe(
 		})
 
 		It("SR-IOV VF with VLAN and rate limiting configuration", reportxml.ID("25963"), func() {
+			caseID := "25963"
 			executed := false
 
 			for _, data := range testData {
@@ -278,8 +283,8 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace("25963-", data)
-				networkName := "25963-" + data.Name
+				ns := setupTestNamespace(caseID+"-", data)
+				networkName := caseID + "-" + data.Name
 				setupSriovNetwork(networkName, data.Name, ns,
 					sriovenv.WithVLAN(100),
 					sriovenv.WithVlanQoS(2),
@@ -301,6 +306,7 @@ var _ = Describe(
 		})
 
 		It("SR-IOV VF with auto link state", reportxml.ID("25961"), func() {
+			caseID := "25961"
 			executed := false
 
 			for _, data := range testData {
@@ -315,8 +321,8 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace("25961-", data)
-				networkName := "25961-" + data.Name
+				ns := setupTestNamespace(caseID+"-", data)
+				networkName := caseID + "-" + data.Name
 				setupSriovNetwork(networkName, data.Name, ns,
 					sriovenv.WithLinkState("auto"))
 
@@ -335,6 +341,7 @@ var _ = Describe(
 		})
 
 		It("SR-IOV VF with enabled link state", reportxml.ID("71006"), func() {
+			caseID := "71006"
 			executed := false
 
 			for _, data := range testData {
@@ -349,8 +356,8 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace("71006-", data)
-				networkName := "71006-" + data.Name
+				ns := setupTestNamespace(caseID+"-", data)
+				networkName := caseID + "-" + data.Name
 				setupSriovNetwork(networkName, data.Name, ns,
 					sriovenv.WithLinkState("enable"))
 
@@ -377,6 +384,7 @@ var _ = Describe(
 		})
 
 		It("MTU configuration for SR-IOV policy", reportxml.ID("69646"), func() {
+			caseID := "69646"
 			executed := false
 
 			for _, data := range testData {
@@ -401,8 +409,8 @@ var _ = Describe(
 				err = sriovenv.WaitForSriovPolicyReady(tsparams.DefaultTimeout)
 				Expect(err).ToNot(HaveOccurred(), "Policy not ready after MTU update")
 
-				ns := setupTestNamespace("69646-", data)
-				networkName := "69646-" + data.Name
+				ns := setupTestNamespace(caseID+"-", data)
+				networkName := caseID + "-" + data.Name
 				setupSriovNetwork(networkName, data.Name, ns,
 					sriovenv.WithSpoof(true), sriovenv.WithTrust(true))
 
@@ -421,6 +429,7 @@ var _ = Describe(
 		})
 
 		It("DPDK SR-IOV VF functionality validation", reportxml.ID("69582"), func() {
+			caseID := "69582"
 			executed := false
 
 			for _, data := range testData {
@@ -442,7 +451,7 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace("69582-", data)
+				ns := setupTestNamespace(caseID+"-", data)
 				networkName := data.Name + "dpdknet"
 				setupSriovNetwork(networkName, data.Name, ns)
 
