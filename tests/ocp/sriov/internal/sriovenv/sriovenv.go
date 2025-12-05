@@ -66,7 +66,7 @@ func WaitForSriovAndMCPStable(timeout, interval time.Duration) error {
 
 			// Check MCP stability
 			mcpList, err := mco.ListMCP(APIClient)
-			if err != nil {
+	if err != nil {
 				return false, nil
 			}
 
@@ -156,7 +156,7 @@ func CreateSriovNetwork(name, resourceName, targetNs string, opts ...NetworkOpti
 
 // WaitForNADCreation waits for NetworkAttachmentDefinition to be created.
 func WaitForNADCreation(name, namespace string, timeout time.Duration) error {
-	return wait.PollUntilContextTimeout(context.Background(), time.Second, timeout, true,
+	return wait.PollUntilContextTimeout(context.Background(), tsparams.PollingInterval, timeout, true,
 		func(ctx context.Context) (bool, error) {
 			_, err := nad.Pull(APIClient, name, namespace)
 
@@ -288,6 +288,7 @@ func discoverInterfaceName(nodeName, vendor, deviceID string) (string, error) {
 }
 
 // UpdateSriovPolicyMTU updates the MTU of an existing SR-IOV policy.
+// PolicyBuilder does not have Update method, so we delete and recreate.
 func UpdateSriovPolicyMTU(policyName string, mtuValue int) error {
 	sriovOpNs := SriovOcpConfig.OcpSriovOperatorNamespace
 
@@ -296,11 +297,32 @@ func UpdateSriovPolicyMTU(policyName string, mtuValue int) error {
 		return err
 	}
 
-	policy.Definition.Spec.Mtu = mtuValue
-	policy.Object.Spec.Mtu = mtuValue
-	_, err = policy.Update(false)
+	// Store the current spec before deletion
+	spec := policy.Definition.Spec.DeepCopy()
+	spec.Mtu = mtuValue
 
-	return err
+	// Delete the existing policy
+	if err = policy.Delete(); err != nil {
+		return fmt.Errorf("failed to delete policy %q for MTU update: %w", policyName, err)
+	}
+
+	// Recreate with updated MTU
+	newPolicy := sriov.NewPolicyBuilder(
+		APIClient,
+		policyName,
+		sriovOpNs,
+		spec.ResourceName,
+		spec.NumVfs,
+		spec.NicSelector.PfNames,
+		spec.NodeSelector,
+	).WithMTU(mtuValue)
+
+	_, err = newPolicy.Create()
+	if err != nil {
+		return fmt.Errorf("failed to recreate policy %q with new MTU: %w", policyName, err)
+	}
+
+	return nil
 }
 
 // ============================================================================
@@ -373,7 +395,7 @@ func WaitForPodWithLabelReady(namespace, labelSelector string, timeout time.Dura
 			// Check if all pods are ready
 			for _, p := range podList {
 				if p.Object == nil {
-					return false, nil
+			return false, nil
 				}
 
 				// Check pod phase
@@ -392,8 +414,8 @@ func WaitForPodWithLabelReady(namespace, labelSelector string, timeout time.Dura
 				}
 
 				if !allReady {
-					return false, nil
-				}
+				return false, nil
+			}
 			}
 
 			return true, nil
@@ -595,8 +617,8 @@ func verifySpoofCheck(clientPod *pod.Builder, interfaceName, expectedState strin
 				strings.Contains(line, fmt.Sprintf("spoofchk %s", expectedState)) {
 				klog.V(90).Infof("Spoof check verified: %s for MAC %s", expectedState, mac)
 
-				return nil
-			}
+	return nil
+}
 		}
 	}
 
@@ -734,8 +756,8 @@ func CleanupLeftoverResources() error {
 
 	klog.V(90).Info("Cleanup completed")
 
-	return nil
-}
+		return nil
+	}
 
 func getTestDeviceNames() []string {
 	configs := tsparams.GetDeviceConfig()
