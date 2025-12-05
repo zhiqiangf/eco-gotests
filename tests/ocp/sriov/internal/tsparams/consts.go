@@ -1,3 +1,4 @@
+// Package tsparams provides test suite parameters and constants for OCP SR-IOV tests.
 package tsparams
 
 import "time"

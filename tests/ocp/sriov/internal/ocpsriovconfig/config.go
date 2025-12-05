@@ -1,3 +1,4 @@
+// Package sriovconfig provides SR-IOV specific configuration for OCP tests.
 package sriovconfig
 
 import (
