@@ -32,6 +32,14 @@ type sriovYAMLConfig struct {
 	OcpSriovTestContainer     string `yaml:"ocp_sriov_test_container"`
 }
 
+// sriovEnvConfig is used to decode only sriov-specific fields from environment
+// without affecting the embedded OcpConfig/GeneralConfig structs.
+type sriovEnvConfig struct {
+	OcpSriovOperatorNamespace string `envconfig:"ECO_OCP_SRIOV_OPERATOR_NAMESPACE"`
+	OcpSriovTestContainer     string `envconfig:"ECO_OCP_SRIOV_TEST_CONTAINER"`
+	SriovInterfaces           string `envconfig:"ECO_OCP_SRIOV_SRIOV_INTERFACE_LIST"`
+}
+
 // NewSriovOcpConfig returns instance of SriovConfig config type.
 func NewSriovOcpConfig() *SriovOcpConfig {
 	log.Print("Creating new SriovOcpConfig struct")
@@ -46,7 +54,13 @@ func NewSriovOcpConfig() *SriovOcpConfig {
 		return nil
 	}
 
-	_, filename, _, _ := runtime.Caller(0)
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		log.Print("Error: unable to determine config file path")
+
+		return nil
+	}
+
 	baseDir := filepath.Dir(filename)
 	confFile := filepath.Join(baseDir, PathToDefaultOcpSriovParamsFile)
 
@@ -98,12 +112,6 @@ func readFile(sriovOcpConfig *SriovOcpConfig, cfgFile string) error {
 func readEnv(sriovOcpConfig *SriovOcpConfig) error {
 	// Only process environment variables for sriov-specific fields
 	// Use a temporary struct to avoid affecting embedded configs
-	type sriovEnvConfig struct {
-		OcpSriovOperatorNamespace string `envconfig:"ECO_OCP_SRIOV_OPERATOR_NAMESPACE"`
-		OcpSriovTestContainer     string `envconfig:"ECO_OCP_SRIOV_TEST_CONTAINER"`
-		SriovInterfaces           string `envconfig:"ECO_OCP_SRIOV_SRIOV_INTERFACE_LIST"`
-	}
-
 	var envConf sriovEnvConfig
 
 	err := envconfig.Process("", &envConf)
