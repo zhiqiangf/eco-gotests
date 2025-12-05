@@ -1,7 +1,6 @@
 package tsparams
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -76,16 +75,15 @@ func parseDeviceConfig() []DeviceConfig {
 
 // GetDeviceConfig returns device configuration from environment variable or defaults.
 func GetDeviceConfig() []DeviceConfig {
-	envDevices := os.Getenv("SRIOV_DEVICES")
-
 	if devices := parseDeviceConfig(); len(devices) > 0 {
 		return devices
 	}
 
+	envDevices := os.Getenv("SRIOV_DEVICES")
 	if envDevices != "" {
-		panic(fmt.Sprintf(
+		klog.Warningf(
 			"SRIOV_DEVICES is set to %q but no valid entries could be parsed; "+
-				"expected format: name:deviceid:vendor:interface", envDevices))
+				"expected format: name:deviceid:vendor:interface. Falling back to defaults.", envDevices)
 	}
 
 	return GetDefaultDeviceConfig()

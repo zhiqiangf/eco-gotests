@@ -202,16 +202,25 @@ func RemoveSriovPolicy(name string, timeout time.Duration) error {
 		})
 }
 
-// InitVF initializes VF for the given device.
+// InitVF initializes VF for the given device using netdevice driver.
+// Note: This function creates a policy on the first node where the device is found
+// and returns immediately. It does not create policies on multiple nodes.
+// This is suitable for single-node testing or when only one node needs the VF.
 func InitVF(name, deviceID, interfaceName, vendor string, vfNum int, workerNodes []*nodes.Builder) (bool, error) {
 	return initVFWithDevType(name, deviceID, interfaceName, vendor, "netdevice", vfNum, workerNodes)
 }
 
-// InitDpdkVF initializes DPDK VF for the given device.
+// InitDpdkVF initializes DPDK VF for the given device using vfio-pci driver.
+// Note: This function creates a policy on the first node where the device is found
+// and returns immediately. It does not create policies on multiple nodes.
+// This is suitable for single-node testing or when only one node needs the VF.
 func InitDpdkVF(name, deviceID, interfaceName, vendor string, vfNum int, workerNodes []*nodes.Builder) (bool, error) {
 	return initVFWithDevType(name, deviceID, interfaceName, vendor, "vfio-pci", vfNum, workerNodes)
 }
 
+// initVFWithDevType creates an SR-IOV policy for the specified device type.
+// It iterates through worker nodes and creates a policy on the first node where
+// the device is successfully discovered. Returns (true, nil) on success.
 func initVFWithDevType(name, deviceID, interfaceName, vendor, devType string, vfNum int,
 	workerNodes []*nodes.Builder) (bool, error) {
 	sriovOpNs := SriovOcpConfig.OcpSriovOperatorNamespace
