@@ -66,7 +66,7 @@ func WaitForSriovAndMCPStable(timeout, interval time.Duration) error {
 
 			// Check MCP stability
 			mcpList, err := mco.ListMCP(APIClient)
-	if err != nil {
+			if err != nil {
 				return false, nil
 			}
 
@@ -306,7 +306,7 @@ func UpdateSriovPolicyMTU(policyName string, mtuValue int) error {
 		return fmt.Errorf("failed to delete policy %q for MTU update: %w", policyName, err)
 	}
 
-	// Recreate with updated MTU
+	// Recreate with updated MTU, preserving all original settings
 	newPolicy := sriov.NewPolicyBuilder(
 		APIClient,
 		policyName,
@@ -316,6 +316,23 @@ func UpdateSriovPolicyMTU(policyName string, mtuValue int) error {
 		spec.NicSelector.PfNames,
 		spec.NodeSelector,
 	).WithMTU(mtuValue)
+
+	// Preserve other policy settings from original spec
+	if spec.DeviceType != "" {
+		newPolicy = newPolicy.WithDevType(spec.DeviceType)
+	}
+
+	if spec.NicSelector.Vendor != "" {
+		newPolicy.Definition.Spec.NicSelector.Vendor = spec.NicSelector.Vendor
+	}
+
+	if spec.NicSelector.DeviceID != "" {
+		newPolicy.Definition.Spec.NicSelector.DeviceID = spec.NicSelector.DeviceID
+	}
+
+	if spec.Priority != 0 {
+		newPolicy.Definition.Spec.Priority = spec.Priority
+	}
 
 	_, err = newPolicy.Create()
 	if err != nil {
@@ -395,7 +412,7 @@ func WaitForPodWithLabelReady(namespace, labelSelector string, timeout time.Dura
 			// Check if all pods are ready
 			for _, p := range podList {
 				if p.Object == nil {
-			return false, nil
+					return false, nil
 				}
 
 				// Check pod phase
@@ -414,8 +431,8 @@ func WaitForPodWithLabelReady(namespace, labelSelector string, timeout time.Dura
 				}
 
 				if !allReady {
-				return false, nil
-			}
+					return false, nil
+				}
 			}
 
 			return true, nil
@@ -617,8 +634,8 @@ func verifySpoofCheck(clientPod *pod.Builder, interfaceName, expectedState strin
 				strings.Contains(line, fmt.Sprintf("spoofchk %s", expectedState)) {
 				klog.V(90).Infof("Spoof check verified: %s for MAC %s", expectedState, mac)
 
-	return nil
-}
+				return nil
+			}
 		}
 	}
 
@@ -714,40 +731,64 @@ func GetPciAddress(namespace, podName, networkName string) (string, error) {
 // ============================================================================
 
 // CleanupLeftoverResources cleans up leftover test resources.
+// This is a best-effort cleanup that logs errors but continues cleaning.
 func CleanupLeftoverResources() error {
 	sriovOpNs := SriovOcpConfig.OcpSriovOperatorNamespace
 
 	klog.V(90).Info("Cleaning up leftover test resources")
 
-	// Cleanup test namespaces
-	namespaces, _ := namespace.List(APIClient, metav1.ListOptions{})
+	// Cleanup test namespaces (prefixed with "e2e-")
+	namespaces, err := namespace.List(APIClient, metav1.ListOptions{})
+	if err != nil {
+		klog.V(90).Infof("Warning: failed to list namespaces: %v", err)
+	}
+
 	for _, ns := range namespaces {
 		if strings.HasPrefix(ns.Definition.Name, "e2e-") {
 			klog.V(90).Infof("Removing leftover namespace %q", ns.Definition.Name)
-			_ = ns.DeleteAndWait(tsparams.CleanupTimeout)
+
+			if delErr := ns.DeleteAndWait(tsparams.CleanupTimeout); delErr != nil {
+				klog.V(90).Infof("Warning: failed to delete namespace %q: %v", ns.Definition.Name, delErr)
+			}
 		}
 	}
 
-	// Cleanup test networks
-	networks, _ := sriov.List(APIClient, sriovOpNs, client.ListOptions{})
+	// Cleanup test networks matching naming conventions:
+	// - "^\d{5}-" matches networks prefixed with test case IDs (e.g., "25959-cx7anl244")
+	// - "\w+dpdknet$" matches DPDK networks suffixed with "dpdknet" (e.g., "cx7anl244dpdknet")
+	networks, err := sriov.List(APIClient, sriovOpNs, client.ListOptions{})
+	if err != nil {
+		klog.V(90).Infof("Warning: failed to list networks: %v", err)
+	}
+
 	pattern := regexp.MustCompile(`^\d{5}-|\w+dpdknet$`)
 
 	for _, net := range networks {
 		if pattern.MatchString(net.Definition.Name) {
 			klog.V(90).Infof("Removing leftover network %q", net.Definition.Name)
-			_ = net.Delete()
+
+			if delErr := net.Delete(); delErr != nil {
+				klog.V(90).Infof("Warning: failed to delete network %q: %v", net.Definition.Name, delErr)
+			}
 		}
 	}
 
-	// Cleanup test policies
-	policies, _ := sriov.ListPolicy(APIClient, sriovOpNs, client.ListOptions{})
+	// Cleanup test policies matching configured device names
+	policies, err := sriov.ListPolicy(APIClient, sriovOpNs, client.ListOptions{})
+	if err != nil {
+		klog.V(90).Infof("Warning: failed to list policies: %v", err)
+	}
+
 	deviceNames := getTestDeviceNames()
 
 	for _, policy := range policies {
 		for _, name := range deviceNames {
 			if policy.Definition.Name == name || strings.HasPrefix(policy.Definition.Name, name) {
 				klog.V(90).Infof("Removing leftover policy %q", policy.Definition.Name)
-				_ = policy.Delete()
+
+				if delErr := policy.Delete(); delErr != nil {
+					klog.V(90).Infof("Warning: failed to delete policy %q: %v", policy.Definition.Name, delErr)
+				}
 
 				break
 			}
@@ -756,8 +797,8 @@ func CleanupLeftoverResources() error {
 
 	klog.V(90).Info("Cleanup completed")
 
-		return nil
-	}
+	return nil
+}
 
 func getTestDeviceNames() []string {
 	configs := tsparams.GetDeviceConfig()

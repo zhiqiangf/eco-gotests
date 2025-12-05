@@ -57,9 +57,11 @@ const (
 	TestPodServerIP = "192.168.1.11/24"
 
 	// TestPodClientMAC is the default MAC address for test client pods.
-	TestPodClientMAC = "20:04:0f:f1:88:01"
+	// Uses locally administered unicast address (bit 1 of first octet set).
+	TestPodClientMAC = "02:04:0f:f1:88:01"
 	// TestPodServerMAC is the default MAC address for test server pods.
-	TestPodServerMAC = "20:04:0f:f1:88:02"
+	// Uses locally administered unicast address (bit 1 of first octet set).
+	TestPodServerMAC = "02:04:0f:f1:88:02"
 )
 
 var (
