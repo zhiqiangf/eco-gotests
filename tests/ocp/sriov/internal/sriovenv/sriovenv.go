@@ -27,9 +27,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// Re-export DeviceConfig for callers that need the type.
-// Callers should import sriovconfig directly if they need to create DeviceConfig values.
-
 const (
 	// DefaultMcpLabel is the default MachineConfigPool label for worker nodes.
 	DefaultMcpLabel = "machineconfiguration.openshift.io/role=worker"
