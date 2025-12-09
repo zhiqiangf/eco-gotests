@@ -1,3 +1,5 @@
+// Package ocpsriovinittools provides initialization tools for OCP SR-IOV tests.
+// It initializes the API client and SR-IOV configuration for use in test suites.
 package ocpsriovinittools
 
 import (
