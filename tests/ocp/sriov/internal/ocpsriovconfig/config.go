@@ -115,14 +115,14 @@ func NewSriovOcpConfig() *SriovOcpConfig {
 
 	err := readFile(&sriovOcpConf, confFile)
 	if err != nil {
-		log.Printf("Error to read config file %s", confFile)
+		log.Printf("Error to read config file %s: %v", confFile, err)
 
 		return nil
 	}
 
 	err = readEnv(&sriovOcpConf)
 	if err != nil {
-		log.Print("Error to read environment variables")
+		log.Printf("Error to read environment variables: %v", err)
 
 		return nil
 	}
@@ -258,7 +258,8 @@ func parseDevicesFromEnv(sriovOcpConfig *SriovOcpConfig) {
 
 	if len(devices) > 0 {
 		sriovOcpConfig.Devices = devices
-	} else if envDevices != "" {
+	} else {
+		// envDevices is non-empty here (we returned early if empty), but no valid entries parsed
 		klog.Warningf(
 			"SRIOV_DEVICES is set to %q but no valid entries could be parsed; "+
 				"expected format: name:deviceid:vendor:interface. Keeping defaults.", envDevices)
