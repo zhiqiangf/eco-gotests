@@ -63,10 +63,3 @@ const (
 	// Uses locally administered unicast address (bit 1 of first octet set).
 	TestPodServerMAC = "02:04:0f:f1:88:02"
 )
-
-var (
-	// Labels list for suite-level test selection
-	// NOTE: Only LabelSuite is included here. Individual test files add their own specific labels.
-	// For example, basic.go adds LabelBasic, so filtering by "basic" will only run those 9 tests.
-	Labels = []string{LabelSuite}
-)

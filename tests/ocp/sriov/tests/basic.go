@@ -12,6 +12,7 @@ import (
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/pod"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/reportxml"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/internal/params"
+	sriovconfig "github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/ocpsriovconfig"
 	. "github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/ocpsriovinittools"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/sriovenv"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/tsparams"
@@ -32,31 +33,31 @@ func isNoCarrierError(err error) bool {
 }
 
 // setupTestNamespace creates a test namespace with required labels and registers cleanup.
-func setupTestNamespace(testID string, data tsparams.DeviceConfig) string {
-	ns := "e2e-" + testID + data.Name
+func setupTestNamespace(testID string, data sriovconfig.DeviceConfig) string {
+	testNamespace := "e2e-" + testID + data.Name
 
-	By(fmt.Sprintf("Creating test namespace %q", ns))
+	By(fmt.Sprintf("Creating test namespace %q", testNamespace))
 
-	nsBuilder := namespace.NewBuilder(APIClient, ns)
+	nsBuilder := namespace.NewBuilder(APIClient, testNamespace)
 	for key, value := range params.PrivilegedNSLabels {
 		nsBuilder.WithLabel(key, value)
 	}
 
 	_, err := nsBuilder.Create()
-	Expect(err).ToNot(HaveOccurred(), "Failed to create namespace %q", ns)
+	Expect(err).ToNot(HaveOccurred(), "Failed to create namespace %q", testNamespace)
 
 	Eventually(func() bool {
 		return nsBuilder.Exists()
-	}, tsparams.NamespaceTimeout, tsparams.RetryInterval).Should(BeTrue(), "Namespace %q should exist", ns)
+	}, tsparams.NamespaceTimeout, tsparams.RetryInterval).Should(BeTrue(), "Namespace %q should exist", testNamespace)
 
 	DeferCleanup(func() {
-		By(fmt.Sprintf("Cleaning up namespace %q", ns))
+		By(fmt.Sprintf("Cleaning up namespace %q", testNamespace))
 
 		err := nsBuilder.DeleteAndWait(tsparams.CleanupTimeout)
-		Expect(err).ToNot(HaveOccurred(), "Failed to delete namespace %q", ns)
+		Expect(err).ToNot(HaveOccurred(), "Failed to delete namespace %q", testNamespace)
 	})
 
-	return ns
+	return testNamespace
 }
 
 // setupSriovNetwork creates a SRIOV network and registers cleanup.
@@ -81,9 +82,9 @@ var _ = Describe(
 	ContinueOnFailure,
 	func() {
 		var (
-			vfNum       = tsparams.GetVFNum()
+			vfNum       = SriovOcpConfig.GetVFNum()
 			workerNodes []*nodes.Builder
-			testData    = tsparams.GetDeviceConfig()
+			testData    = SriovOcpConfig.GetDevices()
 		)
 
 		BeforeAll(func() {
@@ -136,14 +137,14 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace(caseID+"-", data)
+				testNamespace := setupTestNamespace(caseID+"-", data)
 				networkName := caseID + "-" + data.Name
-				setupSriovNetwork(networkName, data.Name, ns,
+				setupSriovNetwork(networkName, data.Name, testNamespace,
 					sriovenv.WithSpoof(true), sriovenv.WithTrust(false))
 
 				By("Verifying VF status with pass traffic")
 				err = sriovenv.CheckVFStatusWithPassTraffic(networkName, data.InterfaceName,
-					ns, "spoof checking on", tsparams.PodReadyTimeout)
+					testNamespace, "spoof checking on", tsparams.PodReadyTimeout)
 				if isNoCarrierError(err) {
 					Skip("Interface has NO-CARRIER status")
 				}
@@ -172,13 +173,13 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace(caseID+"-", data)
+				testNamespace := setupTestNamespace(caseID+"-", data)
 				networkName := caseID + "-" + data.Name
-				setupSriovNetwork(networkName, data.Name, ns,
+				setupSriovNetwork(networkName, data.Name, testNamespace,
 					sriovenv.WithSpoof(false), sriovenv.WithTrust(true))
 
 				err = sriovenv.CheckVFStatusWithPassTraffic(networkName, data.InterfaceName,
-					ns, "spoof checking off", tsparams.PodReadyTimeout)
+					testNamespace, "spoof checking off", tsparams.PodReadyTimeout)
 				if isNoCarrierError(err) {
 					Skip("Interface has NO-CARRIER status")
 				}
@@ -207,13 +208,13 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace(caseID+"-", data)
+				testNamespace := setupTestNamespace(caseID+"-", data)
 				networkName := caseID + "-" + data.Name
-				setupSriovNetwork(networkName, data.Name, ns,
+				setupSriovNetwork(networkName, data.Name, testNamespace,
 					sriovenv.WithSpoof(false), sriovenv.WithTrust(false))
 
 				err = sriovenv.CheckVFStatusWithPassTraffic(networkName, data.InterfaceName,
-					ns, "trust off", tsparams.PodReadyTimeout)
+					testNamespace, "trust off", tsparams.PodReadyTimeout)
 				if isNoCarrierError(err) {
 					Skip("Interface has NO-CARRIER status")
 				}
@@ -242,13 +243,13 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace(caseID+"-", data)
+				testNamespace := setupTestNamespace(caseID+"-", data)
 				networkName := caseID + "-" + data.Name
-				setupSriovNetwork(networkName, data.Name, ns,
+				setupSriovNetwork(networkName, data.Name, testNamespace,
 					sriovenv.WithSpoof(true), sriovenv.WithTrust(true))
 
 				err = sriovenv.CheckVFStatusWithPassTraffic(networkName, data.InterfaceName,
-					ns, "trust on", tsparams.PodReadyTimeout)
+					testNamespace, "trust on", tsparams.PodReadyTimeout)
 				if isNoCarrierError(err) {
 					Skip("Interface has NO-CARRIER status")
 				}
@@ -283,16 +284,16 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace(caseID+"-", data)
+				testNamespace := setupTestNamespace(caseID+"-", data)
 				networkName := caseID + "-" + data.Name
-				setupSriovNetwork(networkName, data.Name, ns,
+				setupSriovNetwork(networkName, data.Name, testNamespace,
 					sriovenv.WithVLAN(100),
 					sriovenv.WithVlanQoS(2),
 					sriovenv.WithMinTxRate(40),
 					sriovenv.WithMaxTxRate(100))
 
 				err = sriovenv.CheckVFStatusWithPassTraffic(networkName, data.InterfaceName,
-					ns, "vlan 100, qos 2", tsparams.PodReadyTimeout)
+					testNamespace, "vlan 100, qos 2", tsparams.PodReadyTimeout)
 				if isNoCarrierError(err) {
 					Skip("Interface has NO-CARRIER status")
 				}
@@ -321,13 +322,13 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace(caseID+"-", data)
+				testNamespace := setupTestNamespace(caseID+"-", data)
 				networkName := caseID + "-" + data.Name
-				setupSriovNetwork(networkName, data.Name, ns,
+				setupSriovNetwork(networkName, data.Name, testNamespace,
 					sriovenv.WithLinkState("auto"))
 
 				err = sriovenv.CheckVFStatusWithPassTraffic(networkName, data.InterfaceName,
-					ns, "link-state auto", tsparams.PodReadyTimeout)
+					testNamespace, "link-state auto", tsparams.PodReadyTimeout)
 				if isNoCarrierError(err) {
 					Skip("Interface has NO-CARRIER status")
 				}
@@ -356,14 +357,14 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace(caseID+"-", data)
+				testNamespace := setupTestNamespace(caseID+"-", data)
 				networkName := caseID + "-" + data.Name
-				setupSriovNetwork(networkName, data.Name, ns,
+				setupSriovNetwork(networkName, data.Name, testNamespace,
 					sriovenv.WithLinkState("enable"))
 
 				// Part 1: Verify link state configuration
 				By("Verifying link state configuration is applied")
-				hasCarrier, err := sriovenv.VerifyLinkStateConfiguration(networkName, ns,
+				hasCarrier, err := sriovenv.VerifyLinkStateConfiguration(networkName, testNamespace,
 					"link-state enable", tsparams.PodReadyTimeout)
 				Expect(err).ToNot(HaveOccurred(), "Failed to verify link state configuration")
 
@@ -374,7 +375,7 @@ var _ = Describe(
 				// Part 2: Test connectivity
 				By("Testing connectivity")
 				err = sriovenv.CheckVFStatusWithPassTraffic(networkName, data.InterfaceName,
-					ns, "link-state enable", tsparams.PodReadyTimeout)
+					testNamespace, "link-state enable", tsparams.PodReadyTimeout)
 				Expect(err).ToNot(HaveOccurred(), "VF connectivity test failed")
 			}
 
@@ -409,13 +410,13 @@ var _ = Describe(
 				err = sriovenv.WaitForSriovPolicyReady(tsparams.DefaultTimeout)
 				Expect(err).ToNot(HaveOccurred(), "Policy not ready after MTU update")
 
-				ns := setupTestNamespace(caseID+"-", data)
+				testNamespace := setupTestNamespace(caseID+"-", data)
 				networkName := caseID + "-" + data.Name
-				setupSriovNetwork(networkName, data.Name, ns,
+				setupSriovNetwork(networkName, data.Name, testNamespace,
 					sriovenv.WithSpoof(true), sriovenv.WithTrust(true))
 
 				err = sriovenv.CheckVFStatusWithPassTraffic(networkName, data.InterfaceName,
-					ns, fmt.Sprintf("mtu %d", tsparams.DefaultTestMTU), tsparams.PodReadyTimeout)
+					testNamespace, fmt.Sprintf("mtu %d", tsparams.DefaultTestMTU), tsparams.PodReadyTimeout)
 				if isNoCarrierError(err) {
 					Skip("Interface has NO-CARRIER status")
 				}
@@ -451,14 +452,14 @@ var _ = Describe(
 				}
 
 				executed = true
-				ns := setupTestNamespace(caseID+"-", data)
+				testNamespace := setupTestNamespace(caseID+"-", data)
 				networkName := data.Name + "dpdknet"
-				setupSriovNetwork(networkName, data.Name, ns)
+				setupSriovNetwork(networkName, data.Name, testNamespace)
 
 				// Wait for NAD to be ready
 				By("Waiting for NetworkAttachmentDefinition to be fully ready")
 				Eventually(func() error {
-					_, err := nad.Pull(APIClient, networkName, ns)
+					_, err := nad.Pull(APIClient, networkName, testNamespace)
 
 					return err
 				}, tsparams.NADTimeout, tsparams.PollingInterval).ShouldNot(HaveOccurred(),
@@ -466,29 +467,29 @@ var _ = Describe(
 
 				// Create DPDK test pod
 				By("Creating DPDK test pod")
-				_, err = sriovenv.CreateDpdkTestPod("sriovdpdk", ns, networkName)
+				_, err = sriovenv.CreateDpdkTestPod("sriovdpdk", testNamespace, networkName)
 				Expect(err).ToNot(HaveOccurred(), "Failed to create DPDK test pod")
 
 				DeferCleanup(func() {
 					By("Cleaning up DPDK test pod")
-					err := sriovenv.DeleteDpdkTestPod("sriovdpdk", ns, tsparams.NamespaceTimeout)
+					err := sriovenv.DeleteDpdkTestPod("sriovdpdk", testNamespace, tsparams.NamespaceTimeout)
 					Expect(err).ToNot(HaveOccurred(), "Failed to delete DPDK test pod")
 				})
 
 				// Wait for pod to be ready
 				By("Waiting for DPDK test pod to be ready")
-				err = sriovenv.WaitForPodWithLabelReady(ns, "name=sriov-dpdk", tsparams.PodReadyTimeout)
+				err = sriovenv.WaitForPodWithLabelReady(testNamespace, "name=sriov-dpdk", tsparams.PodReadyTimeout)
 				Expect(err).ToNot(HaveOccurred(), "DPDK test pod not ready")
 
 				// Verify PCI address is assigned
 				By("Verifying PCI address is assigned to DPDK pod")
-				pciAddress, err := sriovenv.GetPciAddress(ns, "sriovdpdk", networkName)
+				pciAddress, err := sriovenv.GetPciAddress(testNamespace, "sriovdpdk", networkName)
 				Expect(err).ToNot(HaveOccurred(), "Failed to get PCI address for DPDK pod")
 				Expect(pciAddress).NotTo(BeEmpty(), "PCI address should be assigned")
 
 				// Verify DPDK VF is available in pod
 				By("Verifying DPDK VF is available in pod")
-				podBuilder, err := pod.Pull(APIClient, "sriovdpdk", ns)
+				podBuilder, err := pod.Pull(APIClient, "sriovdpdk", testNamespace)
 				Expect(err).ToNot(HaveOccurred(), "Failed to pull DPDK pod")
 				Expect(podBuilder).NotTo(BeNil(), "Pod builder should not be nil")
 

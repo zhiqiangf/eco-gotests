@@ -27,6 +27,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// Re-export DeviceConfig for callers that need the type.
+// Callers should import sriovconfig directly if they need to create DeviceConfig values.
+
 const (
 	// DefaultMcpLabel is the default MachineConfigPool label for worker nodes.
 	DefaultMcpLabel = "machineconfiguration.openshift.io/role=worker"
@@ -233,7 +236,10 @@ func initVFWithDevType(name, deviceID, interfaceName, vendor, devType string, vf
 
 		// Try to discover the actual interface name
 		actualInterface := interfaceName
-		if vendor != "" && deviceID != "" {
+
+		// Only discover interface if not explicitly provided
+		// This allows users to specify exact interface for multi-port NICs
+		if interfaceName == "" && vendor != "" && deviceID != "" {
 			if discovered, err := discoverInterfaceName(nodeName, vendor, deviceID); err == nil {
 				actualInterface = discovered
 			}
@@ -261,6 +267,7 @@ func initVFWithDevType(name, deviceID, interfaceName, vendor, devType string, vf
 
 		if err := WaitForSriovPolicyReady(tsparams.PolicyApplicationTimeout); err != nil {
 			klog.V(90).Infof("Policy not ready on node %q: %v", nodeName, err)
+
 			_ = policy.Delete()
 
 			continue
@@ -419,19 +426,20 @@ func WaitForPodWithLabelReady(namespace, labelSelector string, timeout time.Dura
 			}
 
 			// Check if all pods are ready
-			for _, p := range podList {
-				if p.Object == nil {
+			for _, podItem := range podList {
+				if podItem.Object == nil {
 					return false, nil
 				}
 
 				// Check pod phase
-				if p.Object.Status.Phase != corev1.PodRunning {
+				if podItem.Object.Status.Phase != corev1.PodRunning {
 					return false, nil
 				}
 
 				// Check container ready conditions
 				allReady := true
-				for _, containerStatus := range p.Object.Status.ContainerStatuses {
+
+				for _, containerStatus := range podItem.Object.Status.ContainerStatuses {
 					if !containerStatus.Ready {
 						allReady = false
 
@@ -721,14 +729,14 @@ func GetPciAddress(namespace, podName, networkName string) (string, error) {
 		return "", fmt.Errorf("failed to parse network status: %w", err)
 	}
 
-	for _, s := range status {
-		netName := s.Name
+	for _, networkStatus := range status {
+		netName := networkStatus.Name
 		if idx := strings.LastIndex(netName, "/"); idx >= 0 {
 			netName = netName[idx+1:]
 		}
 
-		if netName == networkName && s.DeviceInfo.Pci.PciAddress != "" {
-			return s.DeviceInfo.Pci.PciAddress, nil
+		if netName == networkName && networkStatus.DeviceInfo.Pci.PciAddress != "" {
+			return networkStatus.DeviceInfo.Pci.PciAddress, nil
 		}
 	}
 
@@ -810,7 +818,7 @@ func CleanupLeftoverResources() error {
 }
 
 func getTestDeviceNames() []string {
-	configs := tsparams.GetDeviceConfig()
+	configs := SriovOcpConfig.GetDevices()
 	names := make([]string, 0, len(configs))
 
 	for _, c := range configs {

@@ -2,4 +2,44 @@
 # OCP SR-IOV default configurations.
 ocp_sriov_test_container: quay.io/ocp-edge-qe/eco-gotests-sriov-client:v4.15.2
 sriov_operator_namespace: openshift-sriov-network-operator
+vf_num: 2
+
+# Default device configurations.
+# Override using SRIOV_DEVICES env var with format: name:deviceid:vendor:interface,...
+devices:
+  - name: e810xxv
+    device_id: "159b"
+    vendor: "8086"
+    interface_name: eno12409
+    supports_min_tx_rate: true
+  - name: e810c
+    device_id: "1593"
+    vendor: "8086"
+    interface_name: ens2f2
+    supports_min_tx_rate: true
+  - name: x710
+    device_id: "1572"
+    vendor: "8086"
+    interface_name: ens5f0
+    supports_min_tx_rate: false
+  - name: bcm57414
+    device_id: "16d7"
+    vendor: "14e4"
+    interface_name: ens4f1np1
+    supports_min_tx_rate: false
+  - name: bcm57508
+    device_id: "1750"
+    vendor: "14e4"
+    interface_name: ens3f0np0
+    supports_min_tx_rate: false
+  - name: e810back
+    device_id: "1591"
+    vendor: "8086"
+    interface_name: ens4f2
+    supports_min_tx_rate: true
+  - name: cx7anl244
+    device_id: "1021"
+    vendor: "15b3"
+    interface_name: ens2f0np0
+    supports_min_tx_rate: true
 ...

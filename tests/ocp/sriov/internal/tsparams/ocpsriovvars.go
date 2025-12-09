@@ -8,6 +8,11 @@ import (
 )
 
 var (
+	// Labels list for suite-level test selection.
+	// NOTE: Only LabelSuite is included here. Individual test files add their own specific labels.
+	// For example, basic.go adds LabelBasic, so filtering by "basic" will only run those 9 tests.
+	Labels = []string{LabelSuite}
+
 	// ReporterCRDsToDump tells to the reporter what CRDs to dump.
 	ReporterCRDsToDump = []k8sreporter.CRData{
 		{Cr: &mcfgv1.MachineConfigPoolList{}},
