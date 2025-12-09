@@ -36,6 +36,8 @@ const (
 	PolicyApplicationTimeout = 20 * time.Minute
 	// InterfaceVerifyTimeout is the timeout for interface verification retries.
 	InterfaceVerifyTimeout = 30 * time.Second
+	// CarrierWaitTimeout is the timeout for waiting for interface carrier status.
+	CarrierWaitTimeout = 30 * time.Second
 	// PollingInterval is the standard polling interval for wait operations.
 	PollingInterval = 2 * time.Second
 	// MCPStableInterval is the polling interval for MachineConfigPool stability checks.

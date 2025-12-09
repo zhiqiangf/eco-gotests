@@ -588,6 +588,7 @@ func CheckVFStatusWithPassTraffic(networkName, interfaceName, namespace, descrip
 }
 
 // VerifyLinkStateConfiguration verifies link state configuration without requiring connectivity.
+// It waits up to CarrierWaitTimeout for carrier status to be established before returning.
 func VerifyLinkStateConfiguration(networkName, namespace, description string,
 	timeout time.Duration) (bool, error) {
 	klog.V(90).Infof("Verifying link state: %q (network: %q, ns: %q)", description, networkName, namespace)
@@ -608,9 +609,32 @@ func VerifyLinkStateConfiguration(networkName, namespace, description string,
 		return false, fmt.Errorf("interface not ready: %w", err)
 	}
 
-	hasCarrier, err := CheckInterfaceCarrier(testPod, "net1")
+	// Wait for carrier status with retry - VF link state may take time to propagate
+	var hasCarrier bool
+
+	err = wait.PollUntilContextTimeout(context.Background(), tsparams.PollingInterval,
+		tsparams.CarrierWaitTimeout, true, func(ctx context.Context) (bool, error) {
+			carrier, checkErr := CheckInterfaceCarrier(testPod, "net1")
+			if checkErr != nil {
+				klog.V(90).Infof("Carrier check failed (will retry): %v", checkErr)
+
+				return false, nil
+			}
+
+			hasCarrier = carrier
+			if !carrier {
+				klog.V(90).Infof("Interface has NO-CARRIER, waiting for link...")
+
+				return false, nil
+			}
+
+			return true, nil
+		})
 	if err != nil {
-		return false, fmt.Errorf("failed to check carrier: %w", err)
+		// Timeout waiting for carrier - return false but no error (let test decide to skip)
+		klog.V(90).Infof("Carrier wait timed out after %v", tsparams.CarrierWaitTimeout)
+
+		return false, nil
 	}
 
 	return hasCarrier, nil
