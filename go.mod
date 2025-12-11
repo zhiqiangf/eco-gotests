@@ -295,7 +295,18 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-require github.com/rh-ecosystem-edge/eco-goinfra v0.0.0-20251210182854-784234f95567
+require (
+	github.com/go-rod/rod v0.116.2
+	github.com/rh-ecosystem-edge/eco-goinfra v0.0.0-20251210182854-784234f95567
+)
+
+require (
+	github.com/ysmood/fetchup v0.2.3 // indirect
+	github.com/ysmood/goob v0.4.0 // indirect
+	github.com/ysmood/got v0.40.0 // indirect
+	github.com/ysmood/gson v0.7.3 // indirect
+	github.com/ysmood/leakless v0.9.0 // indirect
+)
 
 replace (
 	github.com/imdario/mergo => github.com/imdario/mergo v0.3.16

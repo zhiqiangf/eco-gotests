@@ -13,6 +13,10 @@ const (
 	LabelOcpSriovReinstallation = "sriovreinstall"
 	// LabelBasic represents basic test label for filtering.
 	LabelBasic = "basic"
+	// LabelGUI represents GUI test label for browser-based tests.
+	LabelGUI = "gui"
+	// LabelGUIReinstall represents GUI reinstallation test label.
+	LabelGUIReinstall = "gui-reinstall"
 
 	// MCOWaitTimeout represent timeout for mco operations.
 	MCOWaitTimeout = 35 * time.Minute
@@ -42,6 +46,21 @@ const (
 	PolicyApplicationTimeout = 35 * time.Minute
 	// DebugPodCleanupTimeout represents timeout for debug pod cleanup.
 	DebugPodCleanupTimeout = 60 * time.Second
+
+	// VFResourcePollingInterval is the longer interval for VF resource checks (heavier operation).
+	VFResourcePollingInterval = PollingInterval * 3
+	// PingPollingInterval is the longer interval for ping operations.
+	PingPollingInterval = PollingInterval * 3
+
+	// GUI test timeouts
+	// BrowserLoginTimeout is the timeout for console login operations.
+	BrowserLoginTimeout = 60 * time.Second
+	// OperatorInstallTimeout is the timeout for operator installation via GUI.
+	OperatorInstallTimeout = 10 * time.Minute
+	// OperatorUninstallTimeout is the timeout for operator uninstallation via GUI.
+	OperatorUninstallTimeout = 5 * time.Minute
+	// BrowserPageTimeout is the default timeout for page navigation operations.
+	BrowserPageTimeout = 30 * time.Second
 
 	// TestPodClientMAC is the default MAC address for test client pods.
 	TestPodClientMAC = "02:04:0f:f1:88:01"

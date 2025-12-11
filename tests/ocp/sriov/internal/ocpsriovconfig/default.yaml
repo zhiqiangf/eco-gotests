@@ -6,7 +6,17 @@ sriov_operator_namespace: openshift-sriov-network-operator
 # Default VF count
 vf_num: 2
 
-# Device configurations - these are defaults, override via SRIOV_DEVICES env var
+# Browser automation configuration for GUI tests.
+# Console URL/credentials must be provided via environment variables.
+# console_url: ""  # Set via ECO_OCP_CONSOLE_URL
+# console_username: ""  # Set via ECO_OCP_CONSOLE_USERNAME
+# console_password: ""  # Set via ECO_OCP_CONSOLE_PASSWORD
+browser_headless: true
+browser_slowmo_ms: 0
+screenshot_dir: /tmp/screenshots
+
+# Default device configurations.
+# Override using SRIOV_DEVICES env var with format: name:deviceid:vendor:interface,...
 devices:
   - name: e810xxv
     device_id: "159b"

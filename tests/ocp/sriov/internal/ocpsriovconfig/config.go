@@ -40,6 +40,15 @@ type SriovOcpConfig struct {
 	SriovInterfaces           string         `envconfig:"ECO_OCP_SRIOV_INTERFACE_LIST"`
 	Devices                   []DeviceConfig `yaml:"devices"`
 	VFNum                     int            `yaml:"vf_num" envconfig:"ECO_OCP_SRIOV_VF_NUM"`
+
+	// Browser automation configuration for GUI tests
+	ConsoleURL       string `yaml:"console_url" envconfig:"ECO_OCP_CONSOLE_URL"`
+	ConsoleUsername  string `yaml:"console_username" envconfig:"ECO_OCP_CONSOLE_USERNAME"`
+	ConsolePassword  string `yaml:"console_password" envconfig:"ECO_OCP_CONSOLE_PASSWORD"`
+	BrowserHeadless  bool   `yaml:"browser_headless" envconfig:"ECO_BROWSER_HEADLESS"`
+	BrowserRemoteURL string `yaml:"browser_remote_url" envconfig:"ECO_BROWSER_REMOTE_URL"`
+	BrowserSlowMoMS  int    `yaml:"browser_slowmo_ms" envconfig:"ECO_BROWSER_SLOWMO_MS"`
+	ScreenshotDir    string `yaml:"screenshot_dir" envconfig:"ECO_BROWSER_SCREENSHOT_DIR"`
 }
 
 // sriovYAMLConfig and sriovEnvConfig are temporary structs used to decode configuration
@@ -64,6 +73,14 @@ type sriovYAMLConfig struct {
 	OcpSriovTestContainer     string         `yaml:"ocp_sriov_test_container"`
 	Devices                   []DeviceConfig `yaml:"devices"`
 	VFNum                     int            `yaml:"vf_num"`
+	// Browser configuration
+	ConsoleURL       string `yaml:"console_url"`
+	ConsoleUsername  string `yaml:"console_username"`
+	ConsolePassword  string `yaml:"console_password"`
+	BrowserHeadless  *bool  `yaml:"browser_headless"` // Use pointer to detect if set
+	BrowserRemoteURL string `yaml:"browser_remote_url"`
+	BrowserSlowMoMS  int    `yaml:"browser_slowmo_ms"`
+	ScreenshotDir    string `yaml:"screenshot_dir"`
 }
 
 type sriovEnvConfig struct {
@@ -71,6 +88,14 @@ type sriovEnvConfig struct {
 	OcpSriovTestContainer     string `envconfig:"ECO_OCP_SRIOV_TEST_CONTAINER"`
 	SriovInterfaces           string `envconfig:"ECO_OCP_SRIOV_INTERFACE_LIST"`
 	VFNum                     int    `envconfig:"ECO_OCP_SRIOV_VF_NUM"`
+	// Browser configuration
+	ConsoleURL       string `envconfig:"ECO_OCP_CONSOLE_URL"`
+	ConsoleUsername  string `envconfig:"ECO_OCP_CONSOLE_USERNAME"`
+	ConsolePassword  string `envconfig:"ECO_OCP_CONSOLE_PASSWORD"`
+	BrowserHeadless  *bool  `envconfig:"ECO_BROWSER_HEADLESS"`
+	BrowserRemoteURL string `envconfig:"ECO_BROWSER_REMOTE_URL"`
+	BrowserSlowMoMS  int    `envconfig:"ECO_BROWSER_SLOWMO_MS"`
+	ScreenshotDir    string `envconfig:"ECO_BROWSER_SCREENSHOT_DIR"`
 }
 
 // GetDefaultDevices returns default device configurations.
@@ -104,6 +129,10 @@ func NewSriovOcpConfig() *SriovOcpConfig {
 	// Set defaults before reading config files
 	sriovOcpConf.VFNum = DefaultVFNum
 	sriovOcpConf.Devices = GetDefaultDevices()
+
+	// Set browser defaults
+	sriovOcpConf.BrowserHeadless = true // Default to headless for CI
+	sriovOcpConf.ScreenshotDir = "/tmp/screenshots"
 
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
@@ -220,6 +249,35 @@ func readFile(sriovOcpConfig *SriovOcpConfig, cfgFile string) error {
 		sriovOcpConfig.VFNum = yamlConf.VFNum
 	}
 
+	// Copy browser configuration
+	if yamlConf.ConsoleURL != "" {
+		sriovOcpConfig.ConsoleURL = yamlConf.ConsoleURL
+	}
+
+	if yamlConf.ConsoleUsername != "" {
+		sriovOcpConfig.ConsoleUsername = yamlConf.ConsoleUsername
+	}
+
+	if yamlConf.ConsolePassword != "" {
+		sriovOcpConfig.ConsolePassword = yamlConf.ConsolePassword
+	}
+
+	if yamlConf.BrowserHeadless != nil {
+		sriovOcpConfig.BrowserHeadless = *yamlConf.BrowserHeadless
+	}
+
+	if yamlConf.BrowserRemoteURL != "" {
+		sriovOcpConfig.BrowserRemoteURL = yamlConf.BrowserRemoteURL
+	}
+
+	if yamlConf.BrowserSlowMoMS > 0 {
+		sriovOcpConfig.BrowserSlowMoMS = yamlConf.BrowserSlowMoMS
+	}
+
+	if yamlConf.ScreenshotDir != "" {
+		sriovOcpConfig.ScreenshotDir = yamlConf.ScreenshotDir
+	}
+
 	return nil
 }
 
@@ -247,6 +305,35 @@ func readEnv(sriovOcpConfig *SriovOcpConfig) error {
 
 	if envConf.VFNum > 0 {
 		sriovOcpConfig.VFNum = envConf.VFNum
+	}
+
+	// Override browser configuration from environment
+	if envConf.ConsoleURL != "" {
+		sriovOcpConfig.ConsoleURL = envConf.ConsoleURL
+	}
+
+	if envConf.ConsoleUsername != "" {
+		sriovOcpConfig.ConsoleUsername = envConf.ConsoleUsername
+	}
+
+	if envConf.ConsolePassword != "" {
+		sriovOcpConfig.ConsolePassword = envConf.ConsolePassword
+	}
+
+	if envConf.BrowserHeadless != nil {
+		sriovOcpConfig.BrowserHeadless = *envConf.BrowserHeadless
+	}
+
+	if envConf.BrowserRemoteURL != "" {
+		sriovOcpConfig.BrowserRemoteURL = envConf.BrowserRemoteURL
+	}
+
+	if envConf.BrowserSlowMoMS > 0 {
+		sriovOcpConfig.BrowserSlowMoMS = envConf.BrowserSlowMoMS
+	}
+
+	if envConf.ScreenshotDir != "" {
+		sriovOcpConfig.ScreenshotDir = envConf.ScreenshotDir
 	}
 
 	return nil
