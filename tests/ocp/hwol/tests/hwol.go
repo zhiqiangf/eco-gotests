@@ -292,8 +292,9 @@ var _ = Describe(
 			Entry("ovs CNI",
 				Label(tsparams.LabelOffload), Label(tsparams.LabelOvsNetwork), reportxml.ID("85004"),
 				sriovoperator.CNITypeOVS, tsparams.OvsNetworkName),
-			// Sriov CNI same-node HWOL is deferred: VF representors are not on the managed OVS bridge.
-			PEntry("sriov CNI",
+			// Experimental: establish whether same-node Sriov CNI traffic produces a usable
+			// OVS offload signal before defining the final coverage and assertion model.
+			Entry("sriov CNI",
 				Label(tsparams.LabelOffload), Label(tsparams.LabelSriovNetwork), reportxml.ID("85005"),
 				sriovoperator.CNITypeSriov, tsparams.SriovNetworkName),
 		)
