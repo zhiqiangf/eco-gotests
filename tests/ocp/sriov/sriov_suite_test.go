@@ -1,6 +1,7 @@
 package sriov
 
 import (
+	"os"
 	"runtime"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/internal/params"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/internal/reporter"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/internal/sriovoperator"
+	"github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/ocpsriovconfig"
 	. "github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/ocpsriovinittools"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/internal/tsparams"
 	_ "github.com/rh-ecosystem-edge/eco-gotests/tests/ocp/sriov/tests"
@@ -23,6 +25,15 @@ var (
 )
 
 func TestLB(t *testing.T) {
+	suiteConfig, _ := GinkgoConfiguration()
+	if raw := os.Getenv(ocpsriovconfig.ExistingEndpointsEnv); raw != "" {
+		if _, err := ocpsriovconfig.ParseExistingEndpoints(raw); err != nil {
+			t.Fatal(err)
+		}
+		if suiteConfig.LabelFilter != ocpsriovconfig.ExistingEndpointsLabel || suiteConfig.ParallelTotal > 1 {
+			t.Fatal("existing endpoint mode requires --label-filter=existing-endpoints and a single Ginkgo process")
+		}
+	}
 	_, reporterConfig := GinkgoConfiguration()
 	reporterConfig.JUnitReport = SriovOcpConfig.GetJunitReportPath(currentFile)
 
@@ -31,6 +42,13 @@ func TestLB(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
+	if os.Getenv(ocpsriovconfig.ExistingEndpointsEnv) != "" {
+		// The adapted group creates unique namespaces and pulls its selected
+		// workload image through endpoint pods. Do not mutate the shared
+		// fixed namespace or preload unrelated DPDK images in this mode.
+		Expect(sriovoperator.IsSriovDeployed(APIClient, SriovOcpConfig.OcpSriovOperatorNamespace)).To(Succeed())
+		return
+	}
 	By("Creating test namespace with privileged labels")
 
 	for key, value := range params.PrivilegedNSLabels {
@@ -54,6 +72,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred(), "Failed to pull DPDK test image on nodes")
 })
 var _ = AfterSuite(func() {
+	if os.Getenv(ocpsriovconfig.ExistingEndpointsEnv) != "" {
+		return
+	}
 	By("Deleting test namespace")
 
 	err := testNS.DeleteAndWait(tsparams.DefaultTimeout)
